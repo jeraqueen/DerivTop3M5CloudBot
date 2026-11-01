@@ -12,14 +12,20 @@ namespace cAlgo
         [Parameter("Symbols (exact broker names)", DefaultValue = "BTCUSD,ETHUSD,Volatility 5 Index,Volatility 10 Index,Volatility 15 Index,Volatility 15 (1s) Index,Volatility 25 Index")]
         public string SymbolsCsv { get; set; }
 
-        [Parameter("Volume (units per strategy trade)", DefaultValue = 0, MinValue = 0)]
+        [Parameter("Volume (units)", DefaultValue = 0, MinValue = 0)]
         public double RequestedVolume { get; set; }
 
-        [Parameter("75% engine enabled", DefaultValue = true)]
-        public bool Enable75 { get; set; }
+        [Parameter("Maximum open trades (global)", DefaultValue = 7, MinValue = 1, MaxValue = 7)]
+        public int MaximumOpenTrades { get; set; }
 
-        [Parameter("25% engine enabled", DefaultValue = true)]
-        public bool Enable25 { get; set; }
+        [Parameter("Profit close (account currency)", DefaultValue = 0.75, MinValue = 0.75)]
+        public double ProfitClose { get; set; }
+
+        [Parameter("Loss close (account currency)", DefaultValue = 0.25, MinValue = 0.25)]
+        public double LossClose { get; set; }
+
+        [Parameter("Pullback percentage", DefaultValue = 25, MinValue = 1, MaxValue = 99)]
+        public double PullbackPercent { get; set; }
 
         private const string BotLabel = "D3M5";
         private readonly Dictionary<string, MarketState> _markets = new Dictionary<string, MarketState>();
@@ -30,12 +36,9 @@ namespace cAlgo
             public Symbol Symbol;
             public Bars Bars;
             public DateTime BarOpen;
-            public DateTime Last75Attempt = DateTime.MinValue;
-            public DateTime Last25Attempt = DateTime.MinValue;
-            public double EntryPrice25;
-            public double BestPrice25;
-            public TradeType Direction25;
-            public bool Tracking25;
+            public DateTime LastEntryBar = DateTime.MinValue;
+            public double BestFavourablePrice;
+            public bool Tracking;
         }
 
         protected override void OnStart()
@@ -60,16 +63,14 @@ namespace cAlgo
                     continue;
                 }
 
-                var state = new MarketState
+                _markets.Add(name, new MarketState
                 {
                     Name = name,
                     Symbol = symbol,
                     Bars = bars,
                     BarOpen = bars.OpenTimes.LastValue
-                };
-
-                _markets.Add(name, state);
-                Print("Monitoring {0} on M5", name);
+                });
+                Print("Monitoring exact symbol {0} on M5 only", name);
             }
 
             if (_markets.Count == 0)
@@ -80,7 +81,9 @@ namespace cAlgo
             }
 
             Timer.Start(1);
-            Print("DerivTop3M5CloudBot started. No stop-loss is attached. DEMO TESTING ONLY.");
+            Print("Single-engine M5 candle bot started. Profit close +{0}; loss close -{1}; pullback {2}%; global cap {3}.",
+                ProfitClose, LossClose, PullbackPercent, MaximumOpenTrades);
+            Print("Money thresholds are in the trading account currency. No broker-side SL/TP is attached. DEMO ONLY.");
         }
 
         protected override void OnTimer()
@@ -107,188 +110,140 @@ namespace cAlgo
             if (currentBarOpen != s.BarOpen)
             {
                 s.BarOpen = currentBarOpen;
-                s.Tracking25 = false;
+                s.LastEntryBar = DateTime.MinValue;
+                s.Tracking = false;
             }
 
-            var now = Server.Time;
-            var elapsed = (now - currentBarOpen).TotalSeconds;
-            if (elapsed < 0)
+            var position = FindBotPositionForSymbol(s.Name);
+            if (position != null)
+            {
+                ManagePosition(s, position);
+                return;
+            }
+
+            s.Tracking = false;
+            var elapsed = (Server.Time - currentBarOpen).TotalSeconds;
+            if (elapsed < 30 || elapsed > 60)
                 return;
 
-            // Engine 75: sample the developing candle at 30 seconds.
-            // If it is still exactly flat at 30s, allow one final decision at 60s.
-            if (Enable75 && s.Last75Attempt != currentBarOpen)
-            {
-                if (elapsed >= 30 && elapsed < 60)
-                    Try75Entry(s, currentBarOpen);
-                else if (elapsed >= 60)
-                    Try75Entry(s, currentBarOpen);
-            }
-
-            // Engine 25: enter on the first observable non-zero movement from candle open.
-            if (Enable25 && s.Last25Attempt != currentBarOpen && elapsed < 300)
-                Try25Entry(s, currentBarOpen);
-
-            Manage75Exit(s, currentBarOpen, now);
-            Manage25Exit(s);
+            // Initial entry is decided from the developing M5 candle during its first 30-60 seconds.
+            TryEntry(s, currentBarOpen);
         }
 
-        private void Try75Entry(MarketState s, DateTime barOpen)
+        private void TryEntry(MarketState s, DateTime currentBarOpen)
         {
-            var open = s.Bars.OpenPrices.LastValue;
+            if (FindBotPositionForSymbol(s.Name) != null)
+                return;
+
+            if (CountBotPositions() >= Math.Min(7, MaximumOpenTrades))
+                return;
+
+            var candleOpen = s.Bars.OpenPrices.LastValue;
             var current = s.Symbol.Bid;
-            if (current == open)
-            {
-                if ((Server.Time - barOpen).TotalSeconds < 60)
-                    return;
-
-                s.Last75Attempt = barOpen;
-                Print("{0} 75% engine: candle remained flat at 60s; no entry this candle.", s.Name);
-                return;
-            }
-
-            var direction = current > open ? TradeType.Buy : TradeType.Sell;
-            s.Last75Attempt = barOpen;
-            OpenOwnedPosition(s, direction, "75");
-        }
-
-        private void Try25Entry(MarketState s, DateTime barOpen)
-        {
-            var open = s.Bars.OpenPrices.LastValue;
-            var current = s.Symbol.Bid;
-            if (current == open)
+            if (current == candleOpen)
                 return;
 
-            var direction = current > open ? TradeType.Buy : TradeType.Sell;
-            s.Last25Attempt = barOpen;
-
-            var result = OpenOwnedPosition(s, direction, "25");
-            if (result != null && result.IsSuccessful && result.Position != null)
-            {
-                s.Direction25 = direction;
-                s.EntryPrice25 = result.Position.EntryPrice;
-                s.BestPrice25 = result.Position.EntryPrice;
-                s.Tracking25 = true;
-            }
-        }
-
-        private TradeResult OpenOwnedPosition(MarketState s, TradeType direction, string engine)
-        {
-            var label = MakeLabel(s.Name, engine);
-            if (Positions.FindAll(label, s.Name).Length > 0)
-            {
-                Print("{0} {1}% engine already has an open position; no duplicate entry.", s.Name, engine);
-                return null;
-            }
-
+            var direction = current > candleOpen ? TradeType.Buy : TradeType.Sell;
             var requested = RequestedVolume <= 0 ? s.Symbol.VolumeInUnitsMin : RequestedVolume;
             var volume = s.Symbol.NormalizeVolumeInUnits(requested, RoundingMode.Down);
+
             if (volume < s.Symbol.VolumeInUnitsMin || volume > s.Symbol.VolumeInUnitsMax)
             {
-                Print("{0} {1}% engine: requested volume is invalid for this symbol. No trade opened.", s.Name, engine);
-                return null;
+                Print("{0}: invalid volume; no entry.", s.Name);
+                return;
             }
 
-            // No SL or TP is attached: exits are controlled by the agreed M5 strategy rules.
+            var label = MakeLabel(s.Name);
             var result = ExecuteMarketOrder(direction, s.Name, volume, label, (double?)null, (double?)null);
-            if (!result.IsSuccessful)
-                Print("{0} {1}% order failed: {2}", s.Name, engine, result.Error);
-            else
-                Print("{0} {1}% opened {2} at {3}", s.Name, engine, direction, result.Position.EntryPrice);
-
-            return result;
-        }
-
-        private void Manage75Exit(MarketState s, DateTime barOpen, DateTime now)
-        {
-            foreach (var position in Positions.FindAll(MakeLabel(s.Name, "75"), s.Name))
+            if (!result.IsSuccessful || result.Position == null)
             {
-                var originatingOpen = GetM5Open(position.EntryTime);
-                if (now < originatingOpen.AddMinutes(5))
-                    continue;
-
-                var result = ClosePosition(position);
-                if (result.IsSuccessful)
-                    Print("{0} 75% engine closed at originating M5 candle end.", s.Name);
-                else
-                    Print("{0} 75% close failed: {1}", s.Name, result.Error);
-            }
-        }
-
-        private void Manage25Exit(MarketState s)
-        {
-            var positions = Positions.FindAll(MakeLabel(s.Name, "25"), s.Name);
-            if (positions.Length == 0)
-            {
-                s.Tracking25 = false;
+                Print("{0}: {1} entry failed: {2}", s.Name, direction, result.Error);
                 return;
             }
 
-            var position = positions[0];
-            if (Server.Time >= GetM5Open(position.EntryTime).AddMinutes(5))
+            s.LastEntryBar = currentBarOpen;
+            s.BestFavourablePrice = result.Position.EntryPrice;
+            s.Tracking = true;
+            Print("{0}: opened {1} from developing M5 candle at {2}. Open bot positions: {3}/{4}.",
+                s.Name, direction, result.Position.EntryPrice, CountBotPositions(), Math.Min(7, MaximumOpenTrades));
+        }
+
+        private void ManagePosition(MarketState s, Position position)
+        {
+            // NetProfit includes trading costs where supported by the broker.
+            var net = position.NetProfit;
+            if (net <= -Math.Abs(LossClose))
             {
-                var timeExit = ClosePosition(position);
-                if (timeExit.IsSuccessful)
-                    Print("{0} 25% engine closed at originating M5 candle end (pullback not reached).", s.Name);
-                else
-                    Print("{0} 25% candle-end close failed: {1}", s.Name, timeExit.Error);
-                s.Tracking25 = false;
+                CloseAndReport(s, position, "loss threshold reached");
                 return;
             }
 
-            var bid = s.Symbol.Bid;
-            var ask = s.Symbol.Ask;
-            var executable = position.TradeType == TradeType.Buy ? bid : ask;
-
-            if (!s.Tracking25)
+            if (net >= Math.Abs(ProfitClose))
             {
-                s.Direction25 = position.TradeType;
-                s.EntryPrice25 = position.EntryPrice;
-                s.BestPrice25 = executable;
-                s.Tracking25 = true;
+                CloseAndReport(s, position, "profit target reached");
+                return;
+            }
+
+            var executable = position.TradeType == TradeType.Buy ? s.Symbol.Bid : s.Symbol.Ask;
+            if (!s.Tracking)
+            {
+                s.BestFavourablePrice = position.EntryPrice;
+                s.Tracking = true;
             }
 
             if (position.TradeType == TradeType.Buy)
-                s.BestPrice25 = Math.Max(s.BestPrice25, executable);
+                s.BestFavourablePrice = Math.Max(s.BestFavourablePrice, executable);
             else
-                s.BestPrice25 = Math.Min(s.BestPrice25, executable);
+                s.BestFavourablePrice = Math.Min(s.BestFavourablePrice, executable);
 
-            var candleHigh = s.Bars.HighPrices.LastValue;
-            var candleLow = s.Bars.LowPrices.LastValue;
-            var developingRange = candleHigh - candleLow;
-            if (developingRange <= 0)
+            var range = s.Bars.HighPrices.LastValue - s.Bars.LowPrices.LastValue;
+            if (range <= 0)
                 return;
 
-            var pullback = developingRange * 0.25;
-            var triggered = position.TradeType == TradeType.Buy
-                ? executable <= s.BestPrice25 - pullback && s.BestPrice25 > s.EntryPrice25
-                : executable >= s.BestPrice25 + pullback && s.BestPrice25 < s.EntryPrice25;
+            var pullbackDistance = range * (PullbackPercent / 100.0);
+            var pullbackHit = position.TradeType == TradeType.Buy
+                ? s.BestFavourablePrice > position.EntryPrice && executable <= s.BestFavourablePrice - pullbackDistance
+                : s.BestFavourablePrice < position.EntryPrice && executable >= s.BestFavourablePrice + pullbackDistance;
 
-            if (!triggered)
-                return;
+            if (pullbackHit)
+                CloseAndReport(s, position, PullbackPercent + "% favourable-move pullback");
+        }
 
+        private void CloseAndReport(MarketState s, Position position, string reason)
+        {
+            var beforeCloseNet = position.NetProfit;
             var result = ClosePosition(position);
             if (result.IsSuccessful)
             {
-                s.Tracking25 = false;
-                Print("{0} 25% engine closed after 25% pullback of developing M5 range.", s.Name);
+                s.Tracking = false;
+                Print("{0}: closed ({1}). Net P/L at close request: {2}. Re-entry will only be considered from the live M5 candle direction, subject to the 7-trade cap.",
+                    s.Name, reason, beforeCloseNet);
             }
             else
             {
-                Print("{0} 25% close failed: {1}", s.Name, result.Error);
+                Print("{0}: close FAILED ({1}): {2}. Position remains open and will be checked again.", s.Name, reason, result.Error);
             }
         }
 
-        private DateTime GetM5Open(DateTime time)
+        private Position FindBotPositionForSymbol(string symbolName)
         {
-            var minute = (time.Minute / 5) * 5;
-            return new DateTime(time.Year, time.Month, time.Day, time.Hour, minute, 0, time.Kind);
+            return Positions.FirstOrDefault(p =>
+                p.SymbolName == symbolName &&
+                p.Label != null &&
+                p.Label.StartsWith(BotLabel + "_", StringComparison.Ordinal));
         }
 
-        private string MakeLabel(string symbolName, string engine)
+        private int CountBotPositions()
+        {
+            return Positions.Count(p =>
+                p.Label != null &&
+                p.Label.StartsWith(BotLabel + "_", StringComparison.Ordinal));
+        }
+
+        private string MakeLabel(string symbolName)
         {
             var safe = new string(symbolName.Where(char.IsLetterOrDigit).ToArray());
-            return BotLabel + "_" + safe + "_" + engine;
+            return BotLabel + "_" + safe;
         }
     }
 }
