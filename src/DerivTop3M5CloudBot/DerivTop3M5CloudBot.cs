@@ -37,6 +37,7 @@ namespace cAlgo
             public Bars Bars;
             public DateTime BarOpen;
             public DateTime LastEntryBar = DateTime.MinValue;
+            public bool ReentryAllowed;
             public double BestFavourablePrice;
             public bool Tracking;
         }
@@ -111,6 +112,7 @@ namespace cAlgo
             {
                 s.BarOpen = currentBarOpen;
                 s.LastEntryBar = DateTime.MinValue;
+                s.ReentryAllowed = false;
                 s.Tracking = false;
             }
 
@@ -123,10 +125,15 @@ namespace cAlgo
 
             s.Tracking = false;
             var elapsed = (Server.Time - currentBarOpen).TotalSeconds;
-            if (elapsed < 30 || elapsed > 60)
+            if (elapsed < 30 || elapsed >= 300)
                 return;
 
-            // Initial entry is decided from the developing M5 candle during its first 30-60 seconds.
+            // First entry is made after observing 30-60 seconds. After an exit, allow a fresh
+            // direction check and re-entry during the same still-forming M5 candle.
+            if (s.LastEntryBar == currentBarOpen && !s.ReentryAllowed)
+                return;
+            if (s.LastEntryBar != currentBarOpen && elapsed > 60)
+                return;
             TryEntry(s, currentBarOpen);
         }
 
@@ -162,6 +169,7 @@ namespace cAlgo
             }
 
             s.LastEntryBar = currentBarOpen;
+            s.ReentryAllowed = false;
             s.BestFavourablePrice = result.Position.EntryPrice;
             s.Tracking = true;
             Print("{0}: opened {1} from developing M5 candle at {2}. Open bot positions: {3}/{4}.",
@@ -216,6 +224,7 @@ namespace cAlgo
             if (result.IsSuccessful)
             {
                 s.Tracking = false;
+                s.ReentryAllowed = true;
                 Print("{0}: closed ({1}). Net P/L at close request: {2}. Re-entry will only be considered from the live M5 candle direction, subject to the 7-trade cap.",
                     s.Name, reason, beforeCloseNet);
             }
