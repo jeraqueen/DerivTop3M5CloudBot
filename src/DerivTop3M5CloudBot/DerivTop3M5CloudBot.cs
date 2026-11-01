@@ -12,7 +12,7 @@ namespace cAlgo
         [Parameter("Symbols (exact broker names)", DefaultValue = "BTCUSD,ETHUSD,Volatility 5 Index,Volatility 10 Index,Volatility 15 Index,Volatility 15 (1s) Index,Volatility 25 Index")]
         public string SymbolsCsv { get; set; }
 
-        [Parameter("Volume (units per strategy trade)", DefaultValue = 1000, MinValue = 1)]
+        [Parameter("Volume (units per strategy trade)", DefaultValue = 0, MinValue = 0)]
         public double RequestedVolume { get; set; }
 
         [Parameter("75% engine enabled", DefaultValue = true)]
@@ -181,7 +181,8 @@ namespace cAlgo
                 return null;
             }
 
-            var volume = s.Symbol.NormalizeVolumeInUnits(RequestedVolume, RoundingMode.Down);
+            var requested = RequestedVolume <= 0 ? s.Symbol.VolumeInUnitsMin : RequestedVolume;
+            var volume = s.Symbol.NormalizeVolumeInUnits(requested, RoundingMode.Down);
             if (volume < s.Symbol.VolumeInUnitsMin || volume > s.Symbol.VolumeInUnitsMax)
             {
                 Print("{0} {1}% engine: requested volume is invalid for this symbol. No trade opened.", s.Name, engine);
@@ -200,11 +201,12 @@ namespace cAlgo
 
         private void Manage75Exit(MarketState s, DateTime barOpen, DateTime now)
         {
-            if (now < barOpen.AddMinutes(5))
-                return;
-
             foreach (var position in Positions.FindAll(MakeLabel(s.Name, "75"), s.Name))
             {
+                var originatingOpen = GetM5Open(position.EntryTime);
+                if (now < originatingOpen.AddMinutes(5))
+                    continue;
+
                 var result = ClosePosition(position);
                 if (result.IsSuccessful)
                     Print("{0} 75% engine closed at originating M5 candle end.", s.Name);
@@ -223,6 +225,17 @@ namespace cAlgo
             }
 
             var position = positions[0];
+            if (Server.Time >= GetM5Open(position.EntryTime).AddMinutes(5))
+            {
+                var timeExit = ClosePosition(position);
+                if (timeExit.IsSuccessful)
+                    Print("{0} 25% engine closed at originating M5 candle end (pullback not reached).", s.Name);
+                else
+                    Print("{0} 25% candle-end close failed: {1}", s.Name, timeExit.Error);
+                s.Tracking25 = false;
+                return;
+            }
+
             var bid = s.Symbol.Bid;
             var ask = s.Symbol.Ask;
             var executable = position.TradeType == TradeType.Buy ? bid : ask;
@@ -264,6 +277,12 @@ namespace cAlgo
             {
                 Print("{0} 25% close failed: {1}", s.Name, result.Error);
             }
+        }
+
+        private DateTime GetM5Open(DateTime time)
+        {
+            var minute = (time.Minute / 5) * 5;
+            return new DateTime(time.Year, time.Month, time.Day, time.Hour, minute, 0, time.Kind);
         }
 
         private string MakeLabel(string symbolName, string engine)
