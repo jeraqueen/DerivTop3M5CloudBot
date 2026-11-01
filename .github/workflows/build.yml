@@ -1,0 +1,29 @@
+name: Build cTrader cBot
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '7.0.x'
+      - name: Restore
+        run: dotnet restore src/DerivTop3M5CloudBot/DerivTop3M5CloudBot.csproj
+      - name: Build cTrader algo
+        run: dotnet build src/DerivTop3M5CloudBot/DerivTop3M5CloudBot.csproj --configuration Release
+      - name: Upload build output
+        uses: actions/upload-artifact@v4
+        with:
+          name: DerivTop3M5CloudBot-build
+          path: |
+            src/DerivTop3M5CloudBot/bin/Release/**/*.algo
+            src/DerivTop3M5CloudBot/bin/Release/**/*.dll
+          if-no-files-found: warn
