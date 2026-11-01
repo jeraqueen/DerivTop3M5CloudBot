@@ -190,7 +190,7 @@ namespace cAlgo
             }
 
             // No SL or TP is attached: exits are controlled by the agreed M5 strategy rules.
-            var result = ExecuteMarketOrder(direction, s.Name, volume, label, null, null);
+            var result = ExecuteMarketOrder(direction, s.Name, volume, label, (double?)null, (double?)null);
             if (!result.IsSuccessful)
                 Print("{0} {1}% order failed: {2}", s.Name, engine, result.Error);
             else
