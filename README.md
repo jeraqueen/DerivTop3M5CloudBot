@@ -1,50 +1,34 @@
-# Deriv Top 3 M5 Cloud Bot
+# Deriv cTrader Bots — Forager Weekday + Weekend Sweep & Reclaim
 
-Independent cTrader Automate cBot project for demo testing.
+This repository now contains the two current cTrader cBots. The previous multi-market M5 strategy has been replaced and is no longer part of this project.
 
-## Intended markets
-- BTCUSD
-- ETHUSD
-- Volatility 5 Index
-- Volatility 10 Index
-- Volatility 15 Index
-- Volatility 15 (1s) Index
-- Volatility 25 Index
+## Bots
 
-The cBot must validate that each exact symbol is available in the connected cTrader account. It must not silently substitute symbols or discover additional markets.
+### 1. ForagerScalper — weekdays
+- M1 multi-symbol scalper.
+- EMA 9/21 cross, EMA 50 trend filter, and RSI confirmation.
+- ATR-based stop loss, 1:2 reward-to-risk target, and 15-minute time exit.
+- Ranks its configured watchlist and focuses on the top eligible symbols.
+- The default watchlist is FX, gold, and indices; crypto is excluded.
+- Trading is gated off on Saturday and Sunday.
 
-## Strategies
-Two independent engines per market, each with its own position tracking and exit logic.
+### 2. WeekendSweepReclaim — weekends
+- Crypto-only BTC/ETH sweep-and-reclaim strategy.
+- M5 trigger timeframe by default.
+- Uses the prior 12-hour range and looks for failed breakouts that reclaim the range.
+- Maximum three trades per day by default.
+- Partial take profit at 1R and final target at 2R by default.
+- Trading is gated to Saturday and Sunday.
+- Funding and open-interest inputs are manual parameters because cTrader does not provide those exchange feeds natively.
 
-### 75% candle-direction engine
-- Observe the forming M5 candle from its opening.
-- Determine its live direction during the first 30–60 seconds.
-- BUY when the candle is green; SELL when red.
-- Enter no later than 60 seconds after the candle opens, using a deterministic direction decision.
-- Close at the end of that same originating M5 candle.
-- Do not re-enter that strategy on the same candle.
+## Safety defaults
+- Both bots start with Dry Run = true.
+- Both bots default to Allow Live Account = false.
+- Keep both on a Deriv demo account while checking symbol names, spreads, order sizing, and trade management.
+- A successful compile does not prove profitability or guarantee broker execution.
+- The exact symbol names available in the connected Deriv cTrader account must be checked before disabling Dry Run.
 
-### 25% pullback engine
-- Evaluate direction from the live M5 candle at its opening.
-- BUY for upward development; SELL for downward development.
-- Track the favourable extreme and the candle's developing high-to-low range.
-- Close when price retraces 25% of the developing range from the favourable extreme.
-- Do not re-enter that strategy on the same candle.
+## Build
+GitHub Actions builds both projects using the official cTrader Automate NuGet package and uploads the resulting .algo packages as a workflow artifact named Forager-Weekday-and-Weekend-cBots.
 
-## Trade ownership
-Each strategy and symbol has independent position ownership. A strategy may only manage and close positions it opened. No cross-strategy or cross-symbol position management.
-
-## Risk and exits
-- No stop-loss is part of the requested strategy.
-- The 75% engine uses the originating candle-end exit.
-- The 25% engine uses the specified pullback exit.
-- Demo testing only until extensive validation is completed.
-- No guarantee of execution at a desired price or of closure during connectivity/broker failures.
-
-## Scope restrictions
-No legacy strategy/filter code, automatic symbol discovery, extra markets, or extra timeframes. No ATR, spread, market-hours, volatility, or candle-reversal signal filters. Keep only essential broker/order validity and account-margin checks.
-
-## Important implementation note
-The exact broker symbol names and availability must be checked in the user's cTrader account. In particular, do not assume every Deriv synthetic index is offered on Deriv cTrader merely because it exists on another Deriv platform.
-
-The 75% direction decision must be deterministic and based only on price data available at decision time. A candle's final colour cannot be known in advance.
+The .cs files are editable source code; the .algo files are the compiled packages to import into cTrader.

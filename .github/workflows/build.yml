@@ -1,29 +1,51 @@
-name: Build cTrader cBot
+name: Build weekday and weekend cTrader bots
+
 on:
   push:
-    branches: [ main ]
+    branches:
+      - replace-with-forager-weekend-bots
+      - main
   workflow_dispatch:
+
 permissions:
   contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Check out repository
         uses: actions/checkout@v4
-      - name: Setup .NET
+
+      - name: Install .NET SDK
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '6.0.x'
-      - name: Restore
-        run: dotnet restore src/DerivTop3M5CloudBot/DerivTop3M5CloudBot.csproj
-      - name: Build cTrader algo
-        run: dotnet build src/DerivTop3M5CloudBot/DerivTop3M5CloudBot.csproj --configuration Release
-      - name: Upload build output
+
+      - name: Restore weekday bot
+        run: dotnet restore src/ForagerScalper/ForagerScalper.csproj
+
+      - name: Restore weekend bot
+        run: dotnet restore src/WeekendSweepReclaim/WeekendSweepReclaim.csproj
+
+      - name: Build weekday .algo
+        run: dotnet build src/ForagerScalper/ForagerScalper.csproj --configuration Release --no-restore
+
+      - name: Build weekend .algo
+        run: dotnet build src/WeekendSweepReclaim/WeekendSweepReclaim.csproj --configuration Release --no-restore
+
+      - name: Collect compiled cTrader packages
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          find src -type f -name '*.algo' -exec cp {} artifacts/ \;
+          echo "Compiled packages:"
+          ls -lh artifacts
+          test "$(find artifacts -maxdepth 1 -type f -name '*.algo' | wc -l)" -eq 2
+
+      - name: Upload cTrader .algo files
         uses: actions/upload-artifact@v4
         with:
-          name: DerivTop3M5CloudBot-build
-          path: |
-            src/DerivTop3M5CloudBot/bin/Release/**/*.algo
-            src/DerivTop3M5CloudBot/bin/Release/**/*.dll
-          if-no-files-found: warn
+          name: Forager-Weekday-and-Weekend-cBots
+          path: artifacts/*.algo
+          if-no-files-found: error
