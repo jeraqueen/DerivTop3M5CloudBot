@@ -417,7 +417,7 @@ c.Trend.Result.Last(0);
         {
             if (Server.Time.DayOfWeek == DayOfWeek.Saturday || Server.Time.DayOfWeek == DayOfWeek.Sunday)
                 return "weekday board is disabled on weekends";
-            if (File.Exists(_flagPath)) return "stop flag file present";
+            if (System.IO.File.Exists(_flagPath)) return "stop flag file present";
             if (Server.Time < _pauseUntil) return "paused after execution error";
             double startEq = Math.Max(_dayStartEquity, 1e-9);
             double dayPnl = _dayRealized + FloatingPnl();
@@ -623,7 +623,7 @@ _dayRealized.ToString("F2") +
             string line = Server.Time.ToString("yyyy-MM-dd HH:mm:ss") + " | " + msg;
             Print(line);
             if (!LogToFile || _logPath == null) return;
-            try { File.AppendAllText(_logPath, line + Environment.NewLine); } catch { }
+            try { System.IO.File.AppendAllText(_logPath, line + Environment.NewLine); } catch { }
         }
     }
 }
