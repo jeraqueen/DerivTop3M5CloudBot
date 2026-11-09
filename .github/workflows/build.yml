@@ -27,11 +27,6 @@ jobs:
           dotnet restore src/ForagerScalper/ForagerScalper.csproj
           dotnet restore src/WeekendSweepReclaim/WeekendSweepReclaim.csproj
 
-      - name: Clean previous build outputs
-        run: |
-          dotnet clean src/ForagerScalper/ForagerScalper.csproj --configuration Release
-          dotnet clean src/WeekendSweepReclaim/WeekendSweepReclaim.csproj --configuration Release
-
       - name: Build ForagerScalper
         run: dotnet build src/ForagerScalper/ForagerScalper.csproj --configuration Release --no-restore
 
