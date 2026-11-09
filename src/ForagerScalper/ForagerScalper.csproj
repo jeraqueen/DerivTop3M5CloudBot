@@ -4,6 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
+    <AlgoName>ForagerScalper</AlgoName>
     <AlgoPublish>false</AlgoPublish>
   </PropertyGroup>
   <ItemGroup>

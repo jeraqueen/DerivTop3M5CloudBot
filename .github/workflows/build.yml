@@ -38,7 +38,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p artifacts
-          find src -type f -name '*.algo' -exec cp {} artifacts/ \;
+          cp src/ForagerScalper/bin/Release/net6.0/ForagerScalper.algo artifacts/
+          cp src/WeekendSweepReclaim/bin/Release/net6.0/WeekendSweepReclaim.algo artifacts/
           echo "Compiled packages:"
           ls -lh artifacts
           test "$(find artifacts -maxdepth 1 -type f -name '*.algo' | wc -l)" -eq 2
