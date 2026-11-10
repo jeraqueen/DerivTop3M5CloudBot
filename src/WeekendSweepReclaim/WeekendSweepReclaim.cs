@@ -42,6 +42,8 @@ namespace cAlgo.Robots
         [Parameter("Max cost share of TP", DefaultValue = 0.35, MinValue = 0.05, MaxValue = 1.0, Step = 0.05, Group = "Trade")]
         public double MaxCostShare { get; set; }
 
+        [Parameter("Margin Risk % per trade", DefaultValue = 2.0, MinValue = 0.1, MaxValue = 10.0, Step = 0.1, Group = "Size")]
+        public double MarginRiskPercent { get; set; }
         [Parameter("Max lots cap", DefaultValue = 0.50, MinValue = 0.01, Group = "Size")]
         public double MaxLots { get; set; }
 
@@ -284,15 +286,36 @@ namespace cAlgo.Robots
             double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0) atrPips = 10.0;
 
-            // Fixed maximum lot sizing: no percentage-of-margin sizing rule.
-            // MaxLots remains as a hard per-order volume cap.
-            double units = m.Symbol.QuantityToVolumeInUnits(MaxLots);
+            // Free-margin-based sizing, adjusted for current ATR volatility.
+            // PipValue is expressed per lot, so calculate lots first, then convert to units.
+            if (Account.FreeMargin <= 0 || m.Symbol.PipValue <= 0)
+            {
+                if (Verbose) Print("{0}: skipped; free margin or pip value is unavailable.", m.Name);
+                return;
+            }
+
+            double riskMoney = Account.FreeMargin * (MarginRiskPercent / 100.0);
+            double calculatedLots = riskMoney / (atrPips * m.Symbol.PipValue);
+
+            // MaxLots remains a hard per-order cap.
+            if (calculatedLots > MaxLots) calculatedLots = MaxLots;
+            if (calculatedLots <= 0)
+            {
+                if (Verbose) Print("{0}: skipped; calculated lot size is not positive.", m.Name);
+                return;
+            }
+
+            double units = m.Symbol.QuantityToVolumeInUnits(calculatedLots);
             units = m.Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down);
+
             if (units < m.Symbol.VolumeInUnitsMin)
             {
                 if (Verbose) Print("{0}: skipped; calculated volume below minimum.", m.Name);
                 return;
             }
+
+            if (units > m.Symbol.VolumeInUnitsMax)
+                units = m.Symbol.NormalizeVolumeInUnits(m.Symbol.VolumeInUnitsMax, RoundingMode.Down);
 
             m.LastEntry = now;
             if (DryRun)
