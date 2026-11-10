@@ -40,9 +40,12 @@ namespace cAlgo.Robots
         [Parameter("Commission per side (pips)", DefaultValue = 0.0, MinValue = 0, Step = 0.1, Group = "Trade")]
         public double CommissionPipsPerSide { get; set; }
         [Parameter("Max cost share of TP", DefaultValue = 0.35, MinValue = 0.05, MaxValue = 1.0, Step = 0.05, Group = "Trade")]
-        public double MaxCostShare { get; set; }[Parameter("Max lots cap", DefaultValue = 0.50, MinValue = 0.01, Group = "Size")]
+        public double MaxCostShare { get; set; }
+        [Parameter("Max lots cap", DefaultValue = 0.50, MinValue = 0.01, Group = "Size")]
         public double MaxLots { get; set; }
 
+        // Internal sizing factor: retained at 2%; not exposed as a bot setting.
+        private const double InternalMarginRiskPercent = 2.0;
         private const int TickWindowSeconds = 20;
         private const double TickMovePips = 0.8;
         private const string BotLabel = "WeekendSweepReclaim";
@@ -282,8 +285,19 @@ namespace cAlgo.Robots
             double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0) atrPips = 10.0;
 
-            // Fixed maximum lot sizing; MaxLots is the hard per-order cap.
-            double units = m.Symbol.QuantityToVolumeInUnits(MaxLots);
+            // Dynamic free-margin/ATR sizing. The 2% factor stays internal;
+            // MaxLots remains the hard per-order cap.
+            double riskMoney = Account.FreeMargin * (InternalMarginRiskPercent / 100.0);
+            double pipValuePerLot = m.Symbol.PipValue;
+            if (riskMoney <= 0 || pipValuePerLot <= 0)
+            {
+                if (Verbose) Print("{0}: skipped; free margin or pip value is invalid.", m.Name);
+                return;
+            }
+
+            double lots = riskMoney / (atrPips * pipValuePerLot);
+            lots = Math.Min(lots, MaxLots);
+            double units = m.Symbol.QuantityToVolumeInUnits(lots);
             units = m.Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down);
             if (units < m.Symbol.VolumeInUnitsMin)
             {
