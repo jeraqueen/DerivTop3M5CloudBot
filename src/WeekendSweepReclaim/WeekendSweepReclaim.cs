@@ -24,7 +24,7 @@ namespace cAlgo.Robots
 
         [Parameter("Markets to scan", DefaultValue = "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,BTCUSD,ETHUSD", Group = "Strategy")]
         public string MarketsToScan { get; set; }
-        [Parameter("Min confidence %", DefaultValue = 80, MinValue = 40, MaxValue = 100, Group = "Strategy")]
+        [Parameter("Min confidence %", DefaultValue = 70, MinValue = 40, MaxValue = 100, Group = "Strategy")]
         public int MinConfidence { get; set; }
         [Parameter("Max open trades at once", DefaultValue = 7, MinValue = 1, MaxValue = 15, Group = "Strategy")]
         public int MaxOpen { get; set; }
@@ -62,8 +62,14 @@ namespace cAlgo.Robots
             public string Name;
             public Symbol Symbol;
             public Bars Bars;
+            public Bars BarsM5;
+            public Bars BarsM15;
             public ExponentialMovingAverage Fast;
             public ExponentialMovingAverage Slow;
+            public ExponentialMovingAverage FastM5;
+            public ExponentialMovingAverage SlowM5;
+            public ExponentialMovingAverage FastM15;
+            public ExponentialMovingAverage SlowM15;
             public AverageTrueRange Atr;
             public Queue<TickPt> Ticks = new Queue<TickPt>();
             public List<VTrade> VirtualTrades = new List<VTrade>();
@@ -102,13 +108,21 @@ namespace cAlgo.Robots
                 }
 
                 Bars bars = MarketData.GetBars(TimeFrame.Minute, name);
+                Bars barsM5 = MarketData.GetBars(TimeFrame.Minute5, name);
+                Bars barsM15 = MarketData.GetBars(TimeFrame.Minute15, name);
                 var state = new MarketState
                 {
                     Name = name,
                     Symbol = symbol,
                     Bars = bars,
+                    BarsM5 = barsM5,
+                    BarsM15 = barsM15,
                     Fast = Indicators.ExponentialMovingAverage(bars.ClosePrices, 9),
                     Slow = Indicators.ExponentialMovingAverage(bars.ClosePrices, 21),
+                    FastM5 = Indicators.ExponentialMovingAverage(barsM5.ClosePrices, 9),
+                    SlowM5 = Indicators.ExponentialMovingAverage(barsM5.ClosePrices, 21),
+                    FastM15 = Indicators.ExponentialMovingAverage(barsM15.ClosePrices, 9),
+                    SlowM15 = Indicators.ExponentialMovingAverage(barsM15.ClosePrices, 21),
                     Atr = Indicators.AverageTrueRange(bars, 14, MovingAverageType.Simple),
                     IsCrypto = name.IndexOf("BTC", StringComparison.OrdinalIgnoreCase) >= 0
                         || name.IndexOf("ETH", StringComparison.OrdinalIgnoreCase) >= 0
@@ -163,7 +177,7 @@ namespace cAlgo.Robots
             foreach (MarketState m in _markets)
             {
                 if (m.IsCrypto != weekend) continue;
-                if (m.Bars.Count < 40) continue;
+                if (m.Bars.Count < 40 || m.BarsM5.Count < 40 || m.BarsM15.Count < 40) continue;
 
                 double score;
                 TradeType direction;
@@ -190,23 +204,47 @@ namespace cAlgo.Robots
         {
             direction = TradeType.Buy;
             score = 0;
-            double f = m.Fast.Result.Last(1);
-            double s = m.Slow.Result.Last(1);
+
+            // M1 provides the entry trigger; M5 is the primary trend;
+            // M15 is the higher-timeframe directional confirmation.
+            double m1Sep = (m.Fast.Result.Last(1) - m.Slow.Result.Last(1)) / m.Symbol.PipSize;
+            double m5Sep = (m.FastM5.Result.Last(1) - m.SlowM5.Result.Last(1)) / m.Symbol.PipSize;
+            double m15Sep = (m.FastM15.Result.Last(1) - m.SlowM15.Result.Last(1)) / m.Symbol.PipSize;
             double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
-            if (atrPips <= 0) return false;
+            if (atrPips <= 0 || m1Sep == 0 || m5Sep == 0 || m15Sep == 0) return false;
 
-            double separation = (f - s) / m.Symbol.PipSize;
-            direction = separation >= 0 ? TradeType.Buy : TradeType.Sell;
-            int sign = direction == TradeType.Buy ? 1 : -1;
-            double trend = Clamp01(Math.Abs(separation) / (0.5 * atrPips));
+            // Require M5 and M15 to agree; M1 chooses the entry direction.
+            int sign = m1Sep > 0 ? 1 : -1;
+            if (Math.Sign(m5Sep) != sign || Math.Sign(m15Sep) != sign)
+                return false;
+            direction = sign > 0 ? TradeType.Buy : TradeType.Sell;
 
-            int aligned = 0;
+            double m1Trend = Clamp01(Math.Abs(m1Sep) / Math.Max(0.1, 0.35 * atrPips));
+            double m5Trend = Clamp01(Math.Abs(m5Sep) / Math.Max(0.1, 0.50 * atrPips));
+            double m15Trend = Clamp01(Math.Abs(m15Sep) / Math.Max(0.1, 0.75 * atrPips));
+
+            int m1Aligned = 0;
             for (int i = 1; i <= 5; i++)
             {
                 double change = m.Bars.ClosePrices.Last(i) - m.Bars.ClosePrices.Last(i + 1);
-                if (change * sign > 0) aligned++;
+                if (change * sign > 0) m1Aligned++;
             }
-            double candles = aligned / 5.0;
+            int m5Aligned = 0;
+            for (int i = 1; i <= 3; i++)
+            {
+                double change = m.BarsM5.ClosePrices.Last(i) - m.BarsM5.ClosePrices.Last(i + 1);
+                if (change * sign > 0) m5Aligned++;
+            }
+            int m15Aligned = 0;
+            for (int i = 1; i <= 2; i++)
+            {
+                double change = m.BarsM15.ClosePrices.Last(i) - m.BarsM15.ClosePrices.Last(i + 1);
+                if (change * sign > 0) m15Aligned++;
+            }
+
+            double candleScore = (0.20 * (m1Aligned / 5.0))
+                + (0.45 * (m5Aligned / 3.0))
+                + (0.35 * (m15Aligned / 2.0));
 
             double tickMomentum = 0;
             if (m.Ticks.Count >= 5)
@@ -223,13 +261,20 @@ namespace cAlgo.Robots
             double cost = (m.Symbol.Ask - m.Symbol.Bid) / m.Symbol.PipSize
                 + 2.0 * CommissionPipsPerSide;
             double costQuality = Clamp01(1.0 - cost / (MaxCostShare * TakeProfitPips));
-            score = 25.0 * (trend + candles + tickMomentum + costQuality);
+
+            // Transparent 0-100 setup score, not a statistically calibrated win probability.
+            double trendScore = (0.20 * m1Trend) + (0.45 * m5Trend) + (0.35 * m15Trend);
+            score = 100.0 * ((0.35 * trendScore)
+                + (0.35 * candleScore)
+                + (0.15 * tickMomentum)
+                + (0.15 * costQuality));
 
             if (Verbose && (now - m.LastDetailLog).TotalSeconds >= 30)
             {
                 m.LastDetailLog = now;
-                Print("{0} scan: {1:F0}% confidence ({2}, trend {3:F0}, candles {4:F0}, ticks {5:F0}, cost {6:F0})",
-                    m.Name, score, direction, trend * 25, candles * 25, tickMomentum * 25, costQuality * 25);
+                Print("{0} M1/M5/M15 setup score: {1:F0}/100 ({2}; trend {3:F0}, candles {4:F0}, ticks {5:F0}, cost {6:F0})",
+                    m.Name, score, direction, trendScore * 100, candleScore * 100,
+                    tickMomentum * 100, costQuality * 100);
             }
             return true;
         }
