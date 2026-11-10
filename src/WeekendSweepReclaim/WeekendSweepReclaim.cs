@@ -1,7 +1,6 @@
 // =====================================================================================
 // WeekendSweepReclaim.cs - Multi-market continuous stream scalper
-// One cBot instance scans the configured market universe automatically.
-// It can be attached to ANY chart; the chart symbol is not used as a trade filter.
+// UPDATED: True Hedging, Dynamic Auto-Sizing, and EAT Time-Based Pair Filters.
 // =====================================================================================
 using System;
 using System.Collections.Generic;
@@ -142,8 +141,7 @@ namespace cAlgo.Robots
             Positions.Closed += OnPositionClosed;
             RollDay(Server.Time);
             Timer.Start(TimeSpan.FromSeconds(1));
-            Print("Multi-market Cycle Scalper started from chart {0}. Scanning {1} markets automatically.",
-                SymbolName, _markets.Count);
+            Print("Multi-market Cycle Scalper started. Scanning {0} markets automatically.", _markets.Count);
         }
 
         protected override void OnTimer()
@@ -244,15 +242,14 @@ namespace cAlgo.Robots
             double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0 || m1Sep == 0 || m5Sep == 0 || m15Sep == 0) return false;
 
-            // Require M5 and M15 to agree; M1 chooses the entry direction.
+            // ALLOW HEDGING: Direction is based purely on M1 (1-minute momentum)
             int sign = m1Sep > 0 ? 1 : -1;
-            if (Math.Sign(m5Sep) != sign || Math.Sign(m15Sep) != sign)
-                return false;
             direction = sign > 0 ? TradeType.Buy : TradeType.Sell;
 
+            // Penalize score if M5/M15 disagree, but DO NOT block the trade.
             double m1Trend = Clamp01(Math.Abs(m1Sep) / Math.Max(0.1, 0.35 * atrPips));
-            double m5Trend = Clamp01(Math.Abs(m5Sep) / Math.Max(0.1, 0.50 * atrPips));
-            double m15Trend = Clamp01(Math.Abs(m15Sep) / Math.Max(0.1, 0.75 * atrPips));
+            double m5Trend = (Math.Sign(m5Sep) == sign) ? Clamp01(Math.Abs(m5Sep) / Math.Max(0.1, 0.50 * atrPips)) : 0;
+            double m15Trend = (Math.Sign(m15Sep) == sign) ? Clamp01(Math.Abs(m15Sep) / Math.Max(0.1, 0.75 * atrPips)) : 0;
 
             int m1Aligned = 0;
             for (int i = 1; i <= 5; i++)
@@ -315,8 +312,7 @@ namespace cAlgo.Robots
             double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0) atrPips = 10.0;
 
-            // Dynamic free-margin/ATR sizing. The 2% factor stays internal;
-            // MaxLots remains the hard per-order cap.
+            // Dynamic free-margin/ATR sizing. The 2% factor stays internal.
             double riskMoney = Account.FreeMargin * (InternalMarginRiskPercent / 100.0);
             double pipValuePerLot = m.Symbol.PipValue;
             if (riskMoney <= 0 || pipValuePerLot <= 0)
