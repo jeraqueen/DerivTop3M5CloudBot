@@ -59,13 +59,13 @@ jobs:
 
           echo "Verified compiled cTrader packages:"
           ls -lh artifacts
-          test -s artifacts/ForagerScalper.algo
+          test -s artifacts/AutoHedgeScalper.algo
           test -s artifacts/WeekendSweepReclaim.algo
 
       - name: Upload compiled cTrader bots
         uses: actions/upload-artifact@v4
         with:
-          name: ForagerScalper-and-WeekendSweepReclaim
+          name: AutoHedgeScalper-and-WeekendSweepReclaim
           path: artifacts/*.algo
           if-no-files-found: error
           retention-days: 30
