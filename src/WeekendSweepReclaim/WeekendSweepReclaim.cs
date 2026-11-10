@@ -18,7 +18,7 @@ namespace cAlgo.Robots
         [Parameter("Allow Live Account", DefaultValue = false, Group = "Safety")] public bool AllowLiveAccount { get; set; }
         [Parameter("Verbose log", DefaultValue = true, Group = "Safety")] public bool Verbose { get; set; }
 
-        [Parameter("Allowed Symbol Keywords", DefaultValue = "BTC,ETH", Group = "Strategy")] public string AllowedKeywords { get; set; }
+        [Parameter("Allowed Symbol Keywords", DefaultValue = "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,BTC,ETH", Group = "Strategy")] public string AllowedKeywords { get; set; }
         [Parameter("Min confidence %", DefaultValue = 80, MinValue = 40, MaxValue = 100, Group = "Strategy")] public int MinConfidence { get; set; }
         [Parameter("Max open trades at once", DefaultValue = 7, MinValue = 1, MaxValue = 15, Group = "Strategy")] public int MaxOpen { get; set; }
         [Parameter("Seconds between entries", DefaultValue = 2, MinValue = 1, Group = "Strategy")] public int GapSeconds { get; set; }
@@ -49,6 +49,7 @@ namespace cAlgo.Robots
 
         private string _label;
         private bool _symbolAllowed;
+        private bool _isCrypto;
         private DateTime _lastScan = DateTime.MinValue;
         private DateTime _lastEntry = DateTime.MinValue;
         private DateTime _lastDetailLog = DateTime.MinValue;
@@ -66,9 +67,11 @@ namespace cAlgo.Robots
             var allowed = (AllowedKeywords ?? "BTC,ETH").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
             _symbolAllowed = allowed.Any(x => SymbolName.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+            _isCrypto = SymbolName.IndexOf("BTC", StringComparison.OrdinalIgnoreCase) >= 0
+                || SymbolName.IndexOf("ETH", StringComparison.OrdinalIgnoreCase) >= 0;
             if (!_symbolAllowed)
             {
-                Print("SYMBOL BLOCKED: {0} is not in allowed weekend symbols [{1}].", SymbolName, AllowedKeywords);
+                Print("SYMBOL BLOCKED: {0} is not in the allowed markets [{1}].", SymbolName, AllowedKeywords);
                 Stop();
                 return;
             }
@@ -88,7 +91,8 @@ namespace cAlgo.Robots
             Positions.Closed += OnPositionClosed;
             RollDay(Server.Time);
 
-            Print("WeekendSweepReclaim Started. MaxOpen={0} | Gap={1}s | Dynamic Sizing ON", MaxOpen, GapSeconds);
+            Print("Cycle scalper started on {0}. Forex Mon-Fri; BTC/ETH Sat-Sun. MaxOpen={1} | Gap={2}s | Dynamic Sizing ON",
+                SymbolName, MaxOpen, GapSeconds);
         }
 
         protected override void OnTick()
@@ -107,7 +111,9 @@ namespace cAlgo.Robots
 
             ManageOpenTrades(now, bid, ask);
 
-            if (now.DayOfWeek != DayOfWeek.Saturday && now.DayOfWeek != DayOfWeek.Sunday) return;
+            bool weekend = now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday;
+            // Forex symbols trade Monday-Friday; BTC and ETH trade Saturday-Sunday.
+            if (_isCrypto != weekend) return;
             if (DailyLimitHit()) return;
 
             int open = DryRun ? _virtual.Count : Positions.FindAll(_label, SymbolName).Length;
