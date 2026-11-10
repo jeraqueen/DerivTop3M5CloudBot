@@ -178,6 +178,7 @@ namespace cAlgo.Robots
             foreach (MarketState m in _markets)
             {
                 if (m.IsCrypto != weekend) continue;
+                if (!IsPairAllowedNow(m.Name, now)) continue;
                 if (m.Bars.Count < 40 || m.BarsM5.Count < 40 || m.BarsM15.Count < 40) continue;
 
                 double score;
@@ -199,6 +200,35 @@ namespace cAlgo.Robots
                 Enter(m, candidate.Item2, now);
                 totalOpen++;
             }
+        }
+
+        private bool IsPairAllowedNow(string pairName, DateTime utcNow)
+        {
+            int hour = utcNow.Hour;
+            string name = pairName.ToUpperInvariant();
+
+            // 00:00-06:00 UTC (03:00-09:00 EAT): Asian session.
+            if (hour >= 0 && hour < 6)
+                return name.Contains("AUDUSD") || name.Contains("USDJPY");
+
+            // 06:00-08:00 UTC (09:00-11:00 EAT): dead zone.
+            if (hour >= 6 && hour < 8)
+                return false;
+
+            // 08:00-12:00 UTC (11:00-15:00 EAT): London open.
+            if (hour >= 8 && hour < 12)
+                return name.Contains("EURUSD") || name.Contains("GBPUSD") || name.Contains("USDCHF");
+
+            // 12:00-16:00 UTC (15:00-19:00 EAT): London/New York overlap.
+            if (hour >= 12 && hour < 16)
+                return true;
+
+            // 16:00-17:00 UTC (19:00-20:00 EAT): New York afternoon.
+            if (hour >= 16 && hour < 17)
+                return name.Contains("USDCAD") || name.Contains("BTC") || name.Contains("ETH");
+
+            // 17:00 UTC onwards: evening/rollover.
+            return false;
         }
 
         private bool Score(MarketState m, DateTime now, out TradeType direction, out double score)
