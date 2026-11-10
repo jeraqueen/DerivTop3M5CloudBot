@@ -1,7 +1,7 @@
 // =====================================================================================
-// AutoHedgeScalper.cs - Continuous Hedged Stream Scalper
-// Fully automated. Opens trades one by one up to MaxOpen, uses dynamic sizing,
-// and closes them individually. No martingale, no locked baskets.
+// WeekendSweepReclaim.cs - Continuous Weekend Stream Scalper
+// Opens trades individually up to MaxOpen, uses risk-based dynamic sizing,
+// and closes each trade individually. No martingale and no locked baskets.
 // =====================================================================================
 using System;
 using System.Collections.Generic;
@@ -34,7 +34,7 @@ namespace cAlgo.Robots
         [Parameter("Daily loss limit %", DefaultValue = 5.0, MinValue = 0.1, Step = 0.1, Group = "Size")] public double DailyLossPercent { get; set; }
 
         private struct TickPt { public DateTime T; public double Mid; }
-        private class VTrade { public TradeType Side; public double Entry; public DateTime Time; }
+        private class VTrade { public TradeType Side; public double Entry; public DateTime Time; public double VolumeUnits; }
 
         private const int TickWindowSeconds = 20;
         private const double TickMovePips = 0.8;
@@ -192,13 +192,13 @@ namespace cAlgo.Robots
 
         private void Enter(TradeType side, DateTime now, double bid, double ask)
         {
-            _lastEntry = now;
-
             double atrPips = _atr.Result.Last(1) / Symbol.PipSize;
             if (atrPips <= 0) atrPips = 10.0;
 
+            // PipValue is expressed per lot. Convert calculated lots into volume units.
             double riskMoney = Account.FreeMargin * (MarginRiskPercent / 100.0);
-            double units = riskMoney / (atrPips * Symbol.PipValue);
+            double calculatedLots = riskMoney / (atrPips * Symbol.PipValue);
+            double units = calculatedLots * Symbol.LotSize;
 
             double maxUnits = Symbol.QuantityToVolumeInUnits(MaxLots);
             if (units > maxUnits) units = maxUnits;
@@ -210,10 +210,13 @@ namespace cAlgo.Robots
                 return;
             }
 
+            _lastEntry = now;
+            double entryPrice = side == TradeType.Buy ? ask : bid;
+
             if (DryRun)
             {
-                _virtual.Add(new VTrade { Side = side, Entry = side == TradeType.Buy ? ask : bid, Time = now });
-                if (Verbose) Print("[DRY] {0} {1:F2} lots @ {2}", side, units / Symbol.QuantityToVolumeInUnits(1.0), side == TradeType.Buy ? ask : bid);
+                _virtual.Add(new VTrade { Side = side, Entry = entryPrice, Time = now, VolumeUnits = units });
+                if (Verbose) Print("[DRY] {0} {1:F2} lots @ {2}", side, units / Symbol.LotSize, entryPrice);
                 return;
             }
 
@@ -221,7 +224,7 @@ namespace cAlgo.Robots
             if (!res.IsSuccessful)
                 Print("Order failed: {0}", res.Error);
             else if (Verbose)
-                Print("OPEN {0} {1:F2} lots @ {2}", side, units / Symbol.QuantityToVolumeInUnits(1.0), res.Position.EntryPrice);
+                Print("OPEN {0} {1:F2} lots @ {2}", side, units / Symbol.LotSize, res.Position.EntryPrice);
         }
 
         private void ManageOpenTrades(DateTime now, double bid, double ask)
@@ -244,11 +247,14 @@ namespace cAlgo.Robots
                     pips -= 2.0 * CommissionPipsPerSide;
                     _vPips += pips;
                     if (pips > 0) _vWins++; else _vLosses++;
-                    RecordResult(pips, 0);
+
+                    // Approximate simulated net P/L in account currency using volume and pip value.
+                    double simulatedMoney = pips * Symbol.PipValue * (v.VolumeUnits / Symbol.LotSize);
+                    RecordResult(pips, simulatedMoney);
 
                     if (Verbose)
-                        Print("[DRY] close {0} ({1}) {2:F2} pips | total {3:F1} pips, W{4}/L{5}",
-                            v.Side, why, pips, _vPips, _vWins, _vLosses);
+                        Print("[DRY] close {0} ({1}) {2:F2} pips | est. net {3:F2} | day net {4:F2} | total {5:F1} pips, W{6}/L{7}",
+                            v.Side, why, pips, simulatedMoney, _dayNet, _vPips, _vWins, _vLosses);
 
                     _virtual.RemoveAt(i);
                 }
@@ -294,7 +300,8 @@ namespace cAlgo.Robots
         protected override void OnStop()
         {
             if (DryRun)
-                Print("DRY RUN SUMMARY: {0} wins / {1} losses, net {2:F1} pips", _vWins, _vLosses, _vPips);
+                Print("DRY RUN SUMMARY: {0} wins / {1} losses, net {2:F1} pips | estimated day net {3:F2}",
+                    _vWins, _vLosses, _vPips, _dayNet);
         }
     }
 }
