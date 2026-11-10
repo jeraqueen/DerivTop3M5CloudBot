@@ -54,7 +54,7 @@ jobs:
             exit 1
           fi
 
-          cp "${weekday_files[0]}" artifacts/ForagerScalper.algo
+          cp "${weekday_files[0]}" artifacts/AutoHedgeScalper.algo
           cp "${weekend_files[0]}" artifacts/WeekendSweepReclaim.algo
 
           echo "Verified compiled cTrader packages:"
