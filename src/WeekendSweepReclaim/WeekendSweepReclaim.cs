@@ -42,12 +42,8 @@ namespace cAlgo.Robots
         [Parameter("Max cost share of TP", DefaultValue = 0.35, MinValue = 0.05, MaxValue = 1.0, Step = 0.05, Group = "Trade")]
         public double MaxCostShare { get; set; }
 
-        [Parameter("Margin Risk % per trade", DefaultValue = 2.0, MinValue = 0.1, MaxValue = 10.0, Step = 0.1, Group = "Size")]
-        public double MarginRiskPercent { get; set; }
         [Parameter("Max lots cap", DefaultValue = 0.50, MinValue = 0.01, Group = "Size")]
         public double MaxLots { get; set; }
-        [Parameter("Daily loss limit %", DefaultValue = 5.0, MinValue = 0.1, Step = 0.1, Group = "Size")]
-        public double DailyLossPercent { get; set; }
 
         private const int TickWindowSeconds = 20;
         private const double TickMovePips = 0.8;
@@ -155,7 +151,6 @@ namespace cAlgo.Robots
             }
 
             bool weekend = now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday;
-            if (DailyLimitHit()) return;
             int totalOpen = DryRun
                 ? _markets.Sum(m => m.VirtualTrades.Count)
                 : _markets.Sum(m => Positions.FindAll(BotLabel, m.Name).Length);
@@ -244,11 +239,9 @@ namespace cAlgo.Robots
             double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0) atrPips = 10.0;
 
-            double riskMoney = Account.FreeMargin * (MarginRiskPercent / 100.0);
-            double lots = riskMoney / (atrPips * m.Symbol.PipValue);
-            double units = lots * m.Symbol.LotSize;
-            double maxUnits = m.Symbol.QuantityToVolumeInUnits(MaxLots);
-            if (units > maxUnits) units = maxUnits;
+            // Fixed maximum lot sizing: no percentage-of-margin sizing rule.
+            // MaxLots remains as a hard per-order volume cap.
+            double units = m.Symbol.QuantityToVolumeInUnits(MaxLots);
             units = m.Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down);
             if (units < m.Symbol.VolumeInUnitsMin)
             {
@@ -326,11 +319,6 @@ namespace cAlgo.Robots
             if (value < 0) return 0;
             if (value > 1) return 1;
             return value;
-        }
-
-        private bool DailyLimitHit()
-        {
-            return _dayNet <= -(_dayStartBalance * DailyLossPercent / 100.0);
         }
 
         private void RollDay(DateTime now)
