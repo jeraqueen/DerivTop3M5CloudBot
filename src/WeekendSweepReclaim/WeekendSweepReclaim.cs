@@ -1,7 +1,7 @@
 // =====================================================================================
-// WeekendSweepReclaim.cs - Continuous Weekend Stream Scalper
-// Opens trades individually up to MaxOpen, uses risk-based dynamic sizing,
-// and closes each trade individually. No martingale and no locked baskets.
+// WeekendSweepReclaim.cs - Multi-market continuous stream scalper
+// One cBot instance scans the configured market universe automatically.
+// It can be attached to ANY chart; the chart symbol is not used as a trade filter.
 // =====================================================================================
 using System;
 using System.Collections.Generic;
@@ -14,68 +14,77 @@ namespace cAlgo.Robots
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class WeekendSweepReclaim : Robot
     {
-        [Parameter("Dry Run (simulate only)", DefaultValue = false, Group = "Safety")] public bool DryRun { get; set; }
-        [Parameter("Allow Live Account", DefaultValue = false, Group = "Safety")] public bool AllowLiveAccount { get; set; }
-        [Parameter("Verbose log", DefaultValue = true, Group = "Safety")] public bool Verbose { get; set; }
+        [Parameter("Dry Run (simulate only)", DefaultValue = false, Group = "Safety")]
+        public bool DryRun { get; set; }
+        [Parameter("Allow Live Account", DefaultValue = false, Group = "Safety")]
+        public bool AllowLiveAccount { get; set; }
+        [Parameter("Verbose log", DefaultValue = true, Group = "Safety")]
+        public bool Verbose { get; set; }
 
-        [Parameter("Allowed Symbol Keywords", DefaultValue = "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,BTC,ETH", Group = "Strategy")] public string AllowedKeywords { get; set; }
-        [Parameter("Min confidence %", DefaultValue = 80, MinValue = 40, MaxValue = 100, Group = "Strategy")] public int MinConfidence { get; set; }
-        [Parameter("Max open trades at once", DefaultValue = 7, MinValue = 1, MaxValue = 15, Group = "Strategy")] public int MaxOpen { get; set; }
-        [Parameter("Seconds between entries", DefaultValue = 2, MinValue = 1, Group = "Strategy")] public int GapSeconds { get; set; }
+        [Parameter("Markets to scan", DefaultValue = "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,BTCUSD,ETHUSD", Group = "Strategy")]
+        public string MarketsToScan { get; set; }
+        [Parameter("Min confidence %", DefaultValue = 80, MinValue = 40, MaxValue = 100, Group = "Strategy")]
+        public int MinConfidence { get; set; }
+        [Parameter("Max open trades at once", DefaultValue = 7, MinValue = 1, MaxValue = 15, Group = "Strategy")]
+        public int MaxOpen { get; set; }
+        [Parameter("Seconds between entries", DefaultValue = 2, MinValue = 1, Group = "Strategy")]
+        public int GapSeconds { get; set; }
 
-        [Parameter("Take profit (pips)", DefaultValue = 2.0, MinValue = 0.5, Step = 0.1, Group = "Trade")] public double TakeProfitPips { get; set; }
-        [Parameter("Stop loss (pips)", DefaultValue = 3.5, MinValue = 0.3, Step = 0.1, Group = "Trade")] public double StopLossPips { get; set; }
-        [Parameter("Max hold (seconds)", DefaultValue = 120, MinValue = 5, Group = "Trade")] public int MaxHoldSeconds { get; set; }
-        [Parameter("Commission per side (pips)", DefaultValue = 0.0, MinValue = 0, Step = 0.1, Group = "Trade")] public double CommissionPipsPerSide { get; set; }
-        [Parameter("Max cost share of TP", DefaultValue = 0.35, MinValue = 0.05, MaxValue = 1.0, Step = 0.05, Group = "Trade")] public double MaxCostShare { get; set; }
+        [Parameter("Take profit (pips)", DefaultValue = 2.0, MinValue = 0.5, Step = 0.1, Group = "Trade")]
+        public double TakeProfitPips { get; set; }
+        [Parameter("Stop loss (pips)", DefaultValue = 3.5, MinValue = 0.3, Step = 0.1, Group = "Trade")]
+        public double StopLossPips { get; set; }
+        [Parameter("Max hold (seconds)", DefaultValue = 120, MinValue = 5, Group = "Trade")]
+        public int MaxHoldSeconds { get; set; }
+        [Parameter("Commission per side (pips)", DefaultValue = 0.0, MinValue = 0, Step = 0.1, Group = "Trade")]
+        public double CommissionPipsPerSide { get; set; }
+        [Parameter("Max cost share of TP", DefaultValue = 0.35, MinValue = 0.05, MaxValue = 1.0, Step = 0.05, Group = "Trade")]
+        public double MaxCostShare { get; set; }
 
-        [Parameter("Margin Risk % per trade", DefaultValue = 2.0, MinValue = 0.1, MaxValue = 10.0, Step = 0.1, Group = "Size")] public double MarginRiskPercent { get; set; }
-        [Parameter("Max lots cap", DefaultValue = 0.50, MinValue = 0.01, Group = "Size")] public double MaxLots { get; set; }
-        [Parameter("Daily loss limit %", DefaultValue = 5.0, MinValue = 0.1, Step = 0.1, Group = "Size")] public double DailyLossPercent { get; set; }
-
-        private struct TickPt { public DateTime T; public double Mid; }
-        private class VTrade { public TradeType Side; public double Entry; public DateTime Time; public double VolumeUnits; }
+        [Parameter("Margin Risk % per trade", DefaultValue = 2.0, MinValue = 0.1, MaxValue = 10.0, Step = 0.1, Group = "Size")]
+        public double MarginRiskPercent { get; set; }
+        [Parameter("Max lots cap", DefaultValue = 0.50, MinValue = 0.01, Group = "Size")]
+        public double MaxLots { get; set; }
+        [Parameter("Daily loss limit %", DefaultValue = 5.0, MinValue = 0.1, Step = 0.1, Group = "Size")]
+        public double DailyLossPercent { get; set; }
 
         private const int TickWindowSeconds = 20;
         private const double TickMovePips = 0.8;
+        private const string BotLabel = "WeekendSweepReclaim";
 
-        private readonly Queue<TickPt> _window = new Queue<TickPt>();
-        private readonly List<VTrade> _virtual = new List<VTrade>();
+        private struct TickPt { public DateTime T; public double Mid; }
+        private class VTrade
+        {
+            public TradeType Side;
+            public double Entry;
+            public DateTime Time;
+            public double VolumeUnits;
+        }
+        private class MarketState
+        {
+            public string Name;
+            public Symbol Symbol;
+            public Bars Bars;
+            public ExponentialMovingAverage Fast;
+            public ExponentialMovingAverage Slow;
+            public AverageTrueRange Atr;
+            public Queue<TickPt> Ticks = new Queue<TickPt>();
+            public List<VTrade> VirtualTrades = new List<VTrade>();
+            public DateTime LastEntry = DateTime.MinValue;
+            public DateTime LastDetailLog = DateTime.MinValue;
+            public bool IsCrypto;
+        }
 
-        private Bars _m1;
-        private ExponentialMovingAverage _fast;
-        private ExponentialMovingAverage _slow;
-        private AverageTrueRange _atr;
-
-        private string _label;
-        private bool _symbolAllowed;
-        private bool _isCrypto;
+        private readonly List<MarketState> _markets = new List<MarketState>();
         private DateTime _lastScan = DateTime.MinValue;
-        private DateTime _lastEntry = DateTime.MinValue;
-        private DateTime _lastDetailLog = DateTime.MinValue;
-
         private DateTime _day = DateTime.MinValue;
         private double _dayStartBalance;
         private double _dayNet;
-
         private int _vWins, _vLosses;
         private double _vPips;
 
         protected override void OnStart()
         {
-            _label = "WeekendSweepReclaim";
-            var allowed = (AllowedKeywords ?? "BTC,ETH").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim()).Where(x => x.Length > 0).ToArray();
-            _symbolAllowed = allowed.Any(x => SymbolName.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
-            _isCrypto = SymbolName.IndexOf("BTC", StringComparison.OrdinalIgnoreCase) >= 0
-                || SymbolName.IndexOf("ETH", StringComparison.OrdinalIgnoreCase) >= 0;
-            if (!_symbolAllowed)
-            {
-                Print("SYMBOL BLOCKED: {0} is not in the allowed markets [{1}].", SymbolName, AllowedKeywords);
-                Stop();
-                return;
-            }
-
             if (!DryRun && Account.IsLive && !AllowLiveAccount)
             {
                 Print("BLOCKED: live account and Allow Live Account = false. Stopping.");
@@ -83,211 +92,239 @@ namespace cAlgo.Robots
                 return;
             }
 
-            _m1 = MarketData.GetBars(TimeFrame.Minute);
-            _fast = Indicators.ExponentialMovingAverage(_m1.ClosePrices, 9);
-            _slow = Indicators.ExponentialMovingAverage(_m1.ClosePrices, 21);
-            _atr = Indicators.AverageTrueRange(_m1, 14, MovingAverageType.Simple);
+            foreach (string raw in (MarketsToScan ?? "").Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string name = raw.Trim();
+                if (name.Length == 0) continue;
+
+                Symbol symbol = Symbols.GetSymbol(name);
+                if (symbol == null)
+                {
+                    Print("MARKET UNAVAILABLE: {0}. Check the exact symbol name in this broker.", name);
+                    continue;
+                }
+
+                Bars bars = MarketData.GetBars(TimeFrame.Minute, name);
+                var state = new MarketState
+                {
+                    Name = name,
+                    Symbol = symbol,
+                    Bars = bars,
+                    Fast = Indicators.ExponentialMovingAverage(bars.ClosePrices, 9),
+                    Slow = Indicators.ExponentialMovingAverage(bars.ClosePrices, 21),
+                    Atr = Indicators.AverageTrueRange(bars, 14, MovingAverageType.Simple),
+                    IsCrypto = name.IndexOf("BTC", StringComparison.OrdinalIgnoreCase) >= 0
+                        || name.IndexOf("ETH", StringComparison.OrdinalIgnoreCase) >= 0
+                };
+                _markets.Add(state);
+                Print("SCANNING: {0}", name);
+            }
+
+            if (_markets.Count == 0)
+            {
+                Print("No configured markets are available. Check Markets to scan.");
+                Stop();
+                return;
+            }
 
             Positions.Closed += OnPositionClosed;
             RollDay(Server.Time);
-
-            Print("Cycle scalper started on {0}. Forex Mon-Fri; BTC/ETH Sat-Sun. MaxOpen={1} | Gap={2}s | Dynamic Sizing ON",
-                SymbolName, MaxOpen, GapSeconds);
+            Timer.Start(TimeSpan.FromSeconds(1));
+            Print("Multi-market Cycle Scalper started from chart {0}. Scanning {1} markets automatically.",
+                SymbolName, _markets.Count);
         }
 
-        protected override void OnTick()
+        protected override void OnTimer()
         {
             DateTime now = Server.Time;
             RollDay(now);
-            if (!_symbolAllowed) return;
 
-            double bid = Symbol.Bid;
-            double ask = Symbol.Ask;
-            double mid = (bid + ask) / 2.0;
+            foreach (MarketState m in _markets)
+            {
+                double bid = m.Symbol.Bid;
+                double ask = m.Symbol.Ask;
+                if (bid <= 0 || ask <= 0) continue;
+                double mid = (bid + ask) / 2.0;
 
-            _window.Enqueue(new TickPt { T = now, Mid = mid });
-            while (_window.Count > 0 && (now - _window.Peek().T).TotalSeconds > TickWindowSeconds)
-                _window.Dequeue();
+                m.Ticks.Enqueue(new TickPt { T = now, Mid = mid });
+                while (m.Ticks.Count > 0 && (now - m.Ticks.Peek().T).TotalSeconds > TickWindowSeconds)
+                    m.Ticks.Dequeue();
 
-            ManageOpenTrades(now, bid, ask);
+                ManageOpenTrades(m, now, bid, ask);
+            }
 
             bool weekend = now.DayOfWeek == DayOfWeek.Saturday || now.DayOfWeek == DayOfWeek.Sunday;
-            // Forex symbols trade Monday-Friday; BTC and ETH trade Saturday-Sunday.
-            if (_isCrypto != weekend) return;
             if (DailyLimitHit()) return;
-
-            int open = DryRun ? _virtual.Count : Positions.FindAll(_label, SymbolName).Length;
-            if (open >= MaxOpen) return;
-
+            int totalOpen = DryRun
+                ? _markets.Sum(m => m.VirtualTrades.Count)
+                : _markets.Sum(m => Positions.FindAll(BotLabel, m.Name).Length);
+            if (totalOpen >= MaxOpen) return;
             if ((now - _lastScan).TotalSeconds < 1) return;
             _lastScan = now;
 
-            double score;
-            TradeType dir;
-            if (!Score(mid, bid, ask, out dir, out score)) return;
-
-            if (score >= MinConfidence)
+            // Evaluate every eligible market; take the strongest valid signal first.
+            var candidates = new List<Tuple<MarketState, TradeType, double>>();
+            foreach (MarketState m in _markets)
             {
-                if ((now - _lastEntry).TotalSeconds < GapSeconds) return;
+                if (m.IsCrypto != weekend) continue;
+                if (m.Bars.Count < 40) continue;
 
-                double spreadPips = (ask - bid) / Symbol.PipSize;
-                if (spreadPips + 2.0 * CommissionPipsPerSide > MaxCostShare * TakeProfitPips) return;
+                double score;
+                TradeType direction;
+                if (Score(m, now, out direction, out score) && score >= MinConfidence)
+                    candidates.Add(Tuple.Create(m, direction, score));
+            }
 
-                Enter(dir, now, bid, ask);
+            foreach (var candidate in candidates.OrderByDescending(x => x.Item3))
+            {
+                MarketState m = candidate.Item1;
+                if (totalOpen >= MaxOpen) break;
+                if ((now - m.LastEntry).TotalSeconds < GapSeconds) continue;
+
+                double spreadPips = (m.Symbol.Ask - m.Symbol.Bid) / m.Symbol.PipSize;
+                if (spreadPips + 2.0 * CommissionPipsPerSide > MaxCostShare * TakeProfitPips)
+                    continue;
+
+                Enter(m, candidate.Item2, now);
+                totalOpen++;
             }
         }
 
-        private bool Score(double mid, double bid, double ask, out TradeType dir, out double score)
+        private bool Score(MarketState m, DateTime now, out TradeType direction, out double score)
         {
-            dir = TradeType.Buy;
+            direction = TradeType.Buy;
             score = 0;
-
-            if (_m1.Count < 40) return false;
-
-            double f = _fast.Result.Last(1);
-            double s = _slow.Result.Last(1);
-            double atrPips = _atr.Result.Last(1) / Symbol.PipSize;
+            double f = m.Fast.Result.Last(1);
+            double s = m.Slow.Result.Last(1);
+            double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0) return false;
 
-            double sepPips = (f - s) / Symbol.PipSize;
-            dir = sepPips >= 0 ? TradeType.Buy : TradeType.Sell;
-            int sign = dir == TradeType.Buy ? 1 : -1;
+            double separation = (f - s) / m.Symbol.PipSize;
+            direction = separation >= 0 ? TradeType.Buy : TradeType.Sell;
+            int sign = direction == TradeType.Buy ? 1 : -1;
+            double trend = Clamp01(Math.Abs(separation) / (0.5 * atrPips));
 
-            double p1 = Clamp01(Math.Abs(sepPips) / (0.5 * atrPips));
-
-            int agree = 0;
+            int aligned = 0;
             for (int i = 1; i <= 5; i++)
             {
-                double diff = _m1.ClosePrices.Last(i) - _m1.ClosePrices.Last(i + 1);
-                if (diff * sign > 0) agree++;
+                double change = m.Bars.ClosePrices.Last(i) - m.Bars.ClosePrices.Last(i + 1);
+                if (change * sign > 0) aligned++;
             }
-            double p2 = agree / 5.0;
+            double candles = aligned / 5.0;
 
-            double p3 = 0;
-            if (_window.Count >= 5)
+            double tickMomentum = 0;
+            if (m.Ticks.Count >= 5)
             {
-                TickPt oldest = _window.Peek();
-                double span = (Server.Time - oldest.T).TotalSeconds;
-                if (span >= TickWindowSeconds * 0.6)
+                TickPt oldest = m.Ticks.Peek();
+                if ((now - oldest.T).TotalSeconds >= TickWindowSeconds * 0.6)
                 {
-                    double movePips = (mid - oldest.Mid) / Symbol.PipSize * sign;
-                    p3 = Clamp01(movePips / TickMovePips);
+                    double move = ((m.Symbol.Bid + m.Symbol.Ask) / 2.0 - oldest.Mid)
+                        / m.Symbol.PipSize * sign;
+                    tickMomentum = Clamp01(move / TickMovePips);
                 }
             }
 
-            double cost = (ask - bid) / Symbol.PipSize + 2.0 * CommissionPipsPerSide;
-            double p4 = Clamp01(1.0 - cost / (MaxCostShare * TakeProfitPips));
+            double cost = (m.Symbol.Ask - m.Symbol.Bid) / m.Symbol.PipSize
+                + 2.0 * CommissionPipsPerSide;
+            double costQuality = Clamp01(1.0 - cost / (MaxCostShare * TakeProfitPips));
+            score = 25.0 * (trend + candles + tickMomentum + costQuality);
 
-            score = 25.0 * (p1 + p2 + p3 + p4);
-
-            if (Verbose && (Server.Time - _lastDetailLog).TotalSeconds >= 30)
+            if (Verbose && (now - m.LastDetailLog).TotalSeconds >= 30)
             {
-                _lastDetailLog = Server.Time;
-                Print("Scan {0}: {1:F0}% (trend {2:F0}, candles {3:F0}, ticks {4:F0}, cost {5:F0})",
-                    dir, score, p1 * 25, p2 * 25, p3 * 25, p4 * 25);
+                m.LastDetailLog = now;
+                Print("{0} scan: {1:F0}% confidence ({2}, trend {3:F0}, candles {4:F0}, ticks {5:F0}, cost {6:F0})",
+                    m.Name, score, direction, trend * 25, candles * 25, tickMomentum * 25, costQuality * 25);
             }
             return true;
         }
 
-        private static double Clamp01(double x)
+        private void Enter(MarketState m, TradeType side, DateTime now)
         {
-            if (x < 0) return 0;
-            if (x > 1) return 1;
-            return x;
-        }
-
-        private void Enter(TradeType side, DateTime now, double bid, double ask)
-        {
-            double atrPips = _atr.Result.Last(1) / Symbol.PipSize;
+            double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0) atrPips = 10.0;
 
-            // PipValue is expressed per lot. Convert calculated lots into volume units.
             double riskMoney = Account.FreeMargin * (MarginRiskPercent / 100.0);
-            double calculatedLots = riskMoney / (atrPips * Symbol.PipValue);
-            double units = calculatedLots * Symbol.LotSize;
-
-            double maxUnits = Symbol.QuantityToVolumeInUnits(MaxLots);
+            double lots = riskMoney / (atrPips * m.Symbol.PipValue);
+            double units = lots * m.Symbol.LotSize;
+            double maxUnits = m.Symbol.QuantityToVolumeInUnits(MaxLots);
             if (units > maxUnits) units = maxUnits;
-
-            units = Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down);
-            if (units < Symbol.VolumeInUnitsMin)
+            units = m.Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down);
+            if (units < m.Symbol.VolumeInUnitsMin)
             {
-                if (Verbose) Print("Skipped: Calculated volume below minimum.");
+                if (Verbose) Print("{0}: skipped; calculated volume below minimum.", m.Name);
                 return;
             }
 
-            _lastEntry = now;
-            double entryPrice = side == TradeType.Buy ? ask : bid;
-
+            m.LastEntry = now;
             if (DryRun)
             {
-                _virtual.Add(new VTrade { Side = side, Entry = entryPrice, Time = now, VolumeUnits = units });
-                if (Verbose) Print("[DRY] {0} {1:F2} lots @ {2}", side, units / Symbol.LotSize, entryPrice);
+                m.VirtualTrades.Add(new VTrade
+                {
+                    Side = side,
+                    Entry = side == TradeType.Buy ? m.Symbol.Ask : m.Symbol.Bid,
+                    Time = now,
+                    VolumeUnits = units
+                });
+                if (Verbose) Print("[DRY] {0} {1} {2:F2} lots", m.Name, side, units / m.Symbol.LotSize);
                 return;
             }
 
-            TradeResult res = ExecuteMarketOrder(side, SymbolName, units, _label, StopLossPips, TakeProfitPips);
-            if (!res.IsSuccessful)
-                Print("Order failed: {0}", res.Error);
+            TradeResult result = ExecuteMarketOrder(side, m.Name, units, BotLabel, StopLossPips, TakeProfitPips);
+            if (!result.IsSuccessful)
+                Print("{0}: order failed: {1}", m.Name, result.Error);
             else if (Verbose)
-                Print("OPEN {0} {1:F2} lots @ {2}", side, units / Symbol.LotSize, res.Position.EntryPrice);
+                Print("OPEN {0} {1} {2:F2} lots @ {3}", m.Name, side, units / m.Symbol.LotSize, result.Position.EntryPrice);
         }
 
-        private void ManageOpenTrades(DateTime now, double bid, double ask)
+        private void ManageOpenTrades(MarketState m, DateTime now, double bid, double ask)
         {
             if (DryRun)
             {
-                for (int i = _virtual.Count - 1; i >= 0; i--)
+                for (int i = m.VirtualTrades.Count - 1; i >= 0; i--)
                 {
-                    VTrade v = _virtual[i];
-                    double pips = v.Side == TradeType.Buy
-                        ? (bid - v.Entry) / Symbol.PipSize
-                        : (v.Entry - ask) / Symbol.PipSize;
-
-                    string why = null;
-                    if (pips >= TakeProfitPips) why = "TP";
-                    else if (pips <= -StopLossPips) why = "SL";
-                    else if ((now - v.Time).TotalSeconds >= MaxHoldSeconds) why = "TIME";
-                    if (why == null) continue;
+                    VTrade trade = m.VirtualTrades[i];
+                    double pips = trade.Side == TradeType.Buy
+                        ? (bid - trade.Entry) / m.Symbol.PipSize
+                        : (trade.Entry - ask) / m.Symbol.PipSize;
+                    string reason = null;
+                    if (pips >= TakeProfitPips) reason = "TP";
+                    else if (pips <= -StopLossPips) reason = "SL";
+                    else if ((now - trade.Time).TotalSeconds >= MaxHoldSeconds) reason = "TIME";
+                    if (reason == null) continue;
 
                     pips -= 2.0 * CommissionPipsPerSide;
                     _vPips += pips;
                     if (pips > 0) _vWins++; else _vLosses++;
-
-                    // Approximate simulated net P/L in account currency using volume and pip value.
-                    double simulatedMoney = pips * Symbol.PipValue * (v.VolumeUnits / Symbol.LotSize);
-                    RecordResult(pips, simulatedMoney);
-
-                    if (Verbose)
-                        Print("[DRY] close {0} ({1}) {2:F2} pips | est. net {3:F2} | day net {4:F2} | total {5:F1} pips, W{6}/L{7}",
-                            v.Side, why, pips, simulatedMoney, _dayNet, _vPips, _vWins, _vLosses);
-
-                    _virtual.RemoveAt(i);
+                    double money = pips * m.Symbol.PipValue * (trade.VolumeUnits / m.Symbol.LotSize);
+                    _dayNet += money;
+                    if (Verbose) Print("[DRY] {0} closed ({1}) {2:F2} pips; estimated net {3:F2}", m.Name, reason, pips, money);
+                    m.VirtualTrades.RemoveAt(i);
                 }
                 return;
             }
 
-            foreach (Position p in Positions.FindAll(_label, SymbolName))
+            foreach (Position position in Positions.FindAll(BotLabel, m.Name))
             {
-                if ((now - p.EntryTime).TotalSeconds >= MaxHoldSeconds)
-                    ClosePosition(p);
+                if ((now - position.EntryTime).TotalSeconds >= MaxHoldSeconds)
+                    ClosePosition(position);
             }
         }
 
         private void OnPositionClosed(PositionClosedEventArgs args)
         {
-            Position p = args.Position;
-            if (p.Label != _label || p.SymbolName != SymbolName) return;
-
-            RecordResult(p.Pips, p.NetProfit);
+            Position position = args.Position;
+            if (position.Label != BotLabel) return;
+            _dayNet += position.NetProfit;
             if (Verbose)
-                Print("CLOSED {0} {1:F2} pips, net {2:F2} | day net {3:F2}",
-                    p.TradeType, p.Pips, p.NetProfit, _dayNet);
+                Print("CLOSED {0} {1} {2:F2} pips; net {3:F2}; day net {4:F2}",
+                    position.SymbolName, position.TradeType, position.Pips, position.NetProfit, _dayNet);
         }
 
-        private void RecordResult(double pips, double money)
+        private static double Clamp01(double value)
         {
-            _dayNet += money;
+            if (value < 0) return 0;
+            if (value > 1) return 1;
+            return value;
         }
 
         private bool DailyLimitHit()
@@ -305,8 +342,9 @@ namespace cAlgo.Robots
 
         protected override void OnStop()
         {
+            Timer.Stop();
             if (DryRun)
-                Print("DRY RUN SUMMARY: {0} wins / {1} losses, net {2:F1} pips | estimated day net {3:F2}",
+                Print("DRY RUN SUMMARY: {0} wins / {1} losses, {2:F1} net pips; estimated day net {3:F2}",
                     _vWins, _vLosses, _vPips, _dayNet);
         }
     }
