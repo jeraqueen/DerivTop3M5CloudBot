@@ -4,7 +4,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
-    <AlgoName>ForagerScalper</AlgoName>
+    <AlgoName>AutoHedgeScalper</AlgoName>
     <AlgoPublish>false</AlgoPublish>
   </PropertyGroup>
   <ItemGroup>
