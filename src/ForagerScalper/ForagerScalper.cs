@@ -1,5 +1,5 @@
 // =====================================================================================
-// CycleScalper.cs - Continuous Hedged Stream Scalper
+// AutoHedgeScalper.cs - Continuous Hedged Stream Scalper
 // Fully automated. Opens trades one by one up to MaxOpen, uses dynamic sizing,
 // and closes them individually. No martingale, no locked baskets.
 // =====================================================================================
@@ -12,7 +12,7 @@ using cAlgo.API.Indicators;
 namespace cAlgo.Robots
 {
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
-    public class CycleScalper : Robot
+    public class AutoHedgeScalper : Robot
     {
         [Parameter("Dry Run (simulate only)", DefaultValue = false, Group = "Safety")] public bool DryRun { get; set; }
         [Parameter("Allow Live Account", DefaultValue = false, Group = "Safety")] public bool AllowLiveAccount { get; set; }
@@ -60,7 +60,7 @@ namespace cAlgo.Robots
 
         protected override void OnStart()
         {
-            _label = "CycleScalper";
+            _label = "AutoHedgeScalper";
 
             if (!DryRun && Account.IsLive && !AllowLiveAccount)
             {
@@ -77,7 +77,7 @@ namespace cAlgo.Robots
             Positions.Closed += OnPositionClosed;
             RollDay(Server.Time);
 
-            Print("CycleScalper Started. MaxOpen={0} | Gap={1}s | Dynamic Sizing ON", MaxOpen, GapSeconds);
+            Print("AutoHedgeScalper Started. MaxOpen={0} | Gap={1}s | Dynamic Sizing ON", MaxOpen, GapSeconds);
         }
 
         protected override void OnTick()
