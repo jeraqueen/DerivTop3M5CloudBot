@@ -38,7 +38,7 @@ namespace cAlgo.Robots
         public int MaxHoldSeconds { get; set; }
         [Parameter("Commission per side (pips)", DefaultValue = 0.0, MinValue = 0, Step = 0.1, Group = "Trade")]
         public double CommissionPipsPerSide { get; set; }
-        [Parameter("Max cost share of TP", DefaultValue = 0.35, MinValue = 0.05, MaxValue = 1.0, Step = 0.05, Group = "Trade")]
+        [Parameter("Max cost share of TP", DefaultValue = 0.75, MinValue = 0.05, MaxValue = 1.5, Step = 0.05, Group = "Trade")]
         public double MaxCostShare { get; set; }
         [Parameter("Max lots cap", DefaultValue = 0.50, MinValue = 0.01, Group = "Size")]
         public double MaxLots { get; set; }
@@ -192,11 +192,18 @@ namespace cAlgo.Robots
                 if ((now - m.LastEntry).TotalSeconds < GapSeconds) continue;
 
                 double spreadPips = (m.Symbol.Ask - m.Symbol.Bid) / m.Symbol.PipSize;
-                if (spreadPips + 2.0 * CommissionPipsPerSide > MaxCostShare * TakeProfitPips)
+                double totalCostPips = spreadPips + 2.0 * CommissionPipsPerSide;
+                double maxCostPips = MaxCostShare * TakeProfitPips;
+                if (totalCostPips > maxCostPips)
+                {
+                    if (Verbose)
+                        Print("{0}: REJECTED by spread filter. Spread={1:F2} pips, commission={2:F2}, total={3:F2}, allowed={4:F2}.",
+                            m.Name, spreadPips, 2.0 * CommissionPipsPerSide, totalCostPips, maxCostPips);
                     continue;
+                }
 
-                Enter(m, candidate.Item2, now);
-                totalOpen++;
+                if (Enter(m, candidate.Item2, now))
+                    totalOpen++;
             }
         }
 
@@ -300,14 +307,15 @@ namespace cAlgo.Robots
             if (Verbose && (now - m.LastDetailLog).TotalSeconds >= 30)
             {
                 m.LastDetailLog = now;
-                Print("{0} M1/M5/M15 setup score: {1:F0}/100 ({2}; trend {3:F0}, candles {4:F0}, ticks {5:F0}, cost {6:F0})",
+                double spreadNow = (m.Symbol.Ask - m.Symbol.Bid) / m.Symbol.PipSize;
+                Print("{0} M1/M5/M15 setup score: {1:F0}/100 ({2}; trend {3:F0}, candles {4:F0}, ticks {5:F0}, cost quality {6:F0}; spread {7:F2} pips, cost limit {8:F2})",
                     m.Name, score, direction, trendScore * 100, candleScore * 100,
-                    tickMomentum * 100, costQuality * 100);
+                    tickMomentum * 100, costQuality * 100, spreadNow, MaxCostShare * TakeProfitPips);
             }
             return true;
         }
 
-        private void Enter(MarketState m, TradeType side, DateTime now)
+        private bool Enter(MarketState m, TradeType side, DateTime now)
         {
             double atrPips = m.Atr.Result.Last(1) / m.Symbol.PipSize;
             if (atrPips <= 0) atrPips = 10.0;
@@ -317,8 +325,9 @@ namespace cAlgo.Robots
             double pipValuePerLot = m.Symbol.PipValue;
             if (riskMoney <= 0 || pipValuePerLot <= 0)
             {
-                if (Verbose) Print("{0}: skipped; free margin or pip value is invalid.", m.Name);
-                return;
+                Print("{0}: ENTRY BLOCKED; free margin={1:F2}, pip value/lot={2:F5}.",
+                    m.Name, Account.FreeMargin, pipValuePerLot);
+                return false;
             }
 
             double lots = riskMoney / (atrPips * pipValuePerLot);
@@ -327,8 +336,10 @@ namespace cAlgo.Robots
             units = m.Symbol.NormalizeVolumeInUnits(units, RoundingMode.Down);
             if (units < m.Symbol.VolumeInUnitsMin)
             {
-                if (Verbose) Print("{0}: skipped; calculated volume below minimum.", m.Name);
-                return;
+                Print("{0}: ENTRY BLOCKED; calculated volume {1} units ({2:F4} lots) is below broker minimum {3} units ({4:F4} lots). Free margin={5:F2}, ATR={6:F2} pips.",
+                    m.Name, units, units / m.Symbol.LotSize, m.Symbol.VolumeInUnitsMin,
+                    m.Symbol.VolumeInUnitsMin / m.Symbol.LotSize, Account.FreeMargin, atrPips);
+                return false;
             }
 
             m.LastEntry = now;
@@ -341,15 +352,22 @@ namespace cAlgo.Robots
                     Time = now,
                     VolumeUnits = units
                 });
-                if (Verbose) Print("[DRY] {0} {1} {2:F2} lots", m.Name, side, units / m.Symbol.LotSize);
-                return;
+                if (Verbose) Print("[DRY] SIMULATED ENTRY {0} {1} {2:F2} lots", m.Name, side, units / m.Symbol.LotSize);
+                return true;
             }
 
             TradeResult result = ExecuteMarketOrder(side, m.Name, units, BotLabel, StopLossPips, TakeProfitPips);
             if (!result.IsSuccessful)
-                Print("{0}: order failed: {1}", m.Name, result.Error);
-            else if (Verbose)
-                Print("OPEN {0} {1} {2:F2} lots @ {3}", m.Name, side, units / m.Symbol.LotSize, result.Position.EntryPrice);
+            {
+                Print("{0}: BROKER REJECTED ORDER. Error={1}; volume={2} units ({3:F4} lots); spread={4:F2} pips; SL={5:F1}; TP={6:F1}.",
+                    m.Name, result.Error, units, units / m.Symbol.LotSize,
+                    (m.Symbol.Ask - m.Symbol.Bid) / m.Symbol.PipSize, StopLossPips, TakeProfitPips);
+                return false;
+            }
+
+            if (Verbose)
+                Print("OPEN CONFIRMED {0} {1} {2:F2} lots @ {3}", m.Name, side, units / m.Symbol.LotSize, result.Position.EntryPrice);
+            return true;
         }
 
         private void ManageOpenTrades(MarketState m, DateTime now, double bid, double ask)
