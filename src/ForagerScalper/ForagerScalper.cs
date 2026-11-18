@@ -9,7 +9,7 @@ namespace cAlgo.Robots
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class AutoHedgeScalper : Robot
     {
-        [Parameter("Markets to scan (broker symbol names)", DefaultValue = "XAUUSD,EURUSD,GBPUSD,USDJPY,US100,US500,US30", Group = "Markets")]
+        [Parameter("Markets to scan (broker symbol names)", DefaultValue = "XAUUSD,BTCUSD,ADAUSD,ALGUSD,AVAUSD,BATUSD,BCHUSD,BNBUSD,BTCETH,BTCLTC,DOGUSD,DOTUSD,DSHUSD,ETCUSD,FILUSD,IOTUSD,LINKUSD,LTCUSD,AUDJPY,AUDUSD,EURAUD,EURCAD,EURCHF,EURGBP,EURJPY,EURUSD,GBPAUD,GBPJPY,GBPUSD,USDCAD,USDCHF,USDJPY,XAGEUR,XAGUSD,XPDUSD,XPTUSD,XCUUSD", Group = "Markets")]
         public string MarketsToScan { get; set; }
 
         [Parameter("Maximum open positions", DefaultValue = 7, MinValue = 1, MaxValue = 20, Group = "Execution")]
@@ -41,10 +41,10 @@ namespace cAlgo.Robots
 
         private const string BotLabel = "AutoHedgeScalper_MTF";
         private const int PivotStrength = 2;
-        private static readonly TimeSpan SyntheticCandlePeriod = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan SyntheticCandlePeriod = TimeSpan.FromMinutes(1);
         private static readonly TimeSpan ScanInterval = TimeSpan.FromMilliseconds(250);
 
-        private sealed class Candle30
+        private sealed class Candle1
         {
             public DateTime Start;
             public double Open;
@@ -66,10 +66,10 @@ namespace cAlgo.Robots
             public Bars M5;
             public Bars M10;
             public Bars M15;
-            public Candle30 Building30;
-            public Candle30 Previous30;
-            public Candle30 LastClosed30;
-            public DateTime LastEvaluated30 = DateTime.MinValue;
+            public Candle1 Building1;
+            public Candle1 Previous1;
+            public Candle1 LastClosed1;
+            public DateTime LastEvaluated1 = DateTime.MinValue;
             public DateTime LastEntryTime = DateTime.MinValue;
             public TradeType? PendingBreakoutSide;
             public double PendingBreakoutLevel;
@@ -124,7 +124,7 @@ namespace cAlgo.Robots
                     };
 
                     _markets.Add(state);
-                    Print("SCANNING {0}: M15 structure / M10 levels / M5+M1 approach / synthetic 30-second confirmation.",
+                    Print("SCANNING {0}: M15 structure / M10 levels / M5+M1 approach / synthetic 1-minute confirmation.",
                         name);
                 }
                 catch (Exception ex)
@@ -155,10 +155,10 @@ namespace cAlgo.Robots
                 UpdateSynthetic30(market, now);
                 ManagePositions(market, now);
 
-                if (market.LastClosed30 == null || market.LastClosed30.Start == market.LastEvaluated30)
+                if (market.LastClosed1 == null || market.LastClosed1.Start == market.LastEvaluated1)
                     continue;
 
-                market.LastEvaluated30 = market.LastClosed30.Start;
+                market.LastEvaluated1 = market.LastClosed1.Start;
 
                 int openCount = _markets.Sum(x => Positions.FindAll(BotLabel, x.Symbol.Name).Length);
 
@@ -171,6 +171,8 @@ namespace cAlgo.Robots
                 Signal signal = FindSignal(market, now);
                 if (signal != null)
                     OpenPosition(market, signal, now);
+                else
+                    Print("{0}: scanned latest 1-minute close; no confirmed setup yet.", market.Symbol.Name);
             }
         }
 
@@ -182,9 +184,9 @@ namespace cAlgo.Robots
                 return;
 
             double mid = (bid + ask) / 2.0;
-            if (market.Building30 == null)
+            if (market.Building1 == null)
             {
-                market.Building30 = new Candle30
+                market.Building1 = new Candle1
                 {
                     Start = now,
                     Open = mid,
@@ -195,11 +197,11 @@ namespace cAlgo.Robots
                 return;
             }
 
-            if ((now - market.Building30.Start) >= SyntheticCandlePeriod)
+            if ((now - market.Building1.Start) >= SyntheticCandlePeriod)
             {
-                market.Previous30 = market.LastClosed30;
-                market.LastClosed30 = market.Building30;
-                market.Building30 = new Candle30
+                market.Previous1 = market.LastClosed1;
+                market.LastClosed1 = market.Building1;
+                market.Building1 = new Candle1
                 {
                     Start = now,
                     Open = mid,
@@ -210,9 +212,9 @@ namespace cAlgo.Robots
                 return;
             }
 
-            market.Building30.High = Math.Max(market.Building30.High, mid);
-            market.Building30.Low = Math.Min(market.Building30.Low, mid);
-            market.Building30.Close = mid;
+            market.Building1.High = Math.Max(market.Building1.High, mid);
+            market.Building1.Low = Math.Min(market.Building1.Low, mid);
+            market.Building1.Close = mid;
         }
 
         private Signal FindSignal(MarketState m, DateTime now)
@@ -252,7 +254,7 @@ namespace cAlgo.Robots
             bool bullish30 = IsBullishConfirmation(m);
             bool bearish30 = IsBearishConfirmation(m);
 
-            // Reversal at support or resistance: enter against the approach after the 30-second confirmation.
+            // Reversal at support or resistance: enter against the approach after the 1-minute confirmation.
             if (touchedSupport && bullish30)
             {
                 double target = resistance;
@@ -267,7 +269,7 @@ namespace cAlgo.Robots
                     return MakeSignal(m, TradeType.Sell, resistance + buffer, target, "Resistance rejection; " + structure);
             }
 
-            // Trendline reactions use the same 30-second confirmation.
+            // Trendline reactions use the same 1-minute confirmation.
             if (IsNear(price, trendSupport, tolerance)
                 && (CandleTouches(m.M1, trendSupport, tolerance) || CandleTouches(m.M5, trendSupport, tolerance))
                 && bullish30)
@@ -286,7 +288,7 @@ namespace cAlgo.Robots
                     return MakeSignal(m, TradeType.Sell, trendResistance + buffer, target, "Falling trendline rejection; " + structure);
             }
 
-            // Detect a break on a completed M1 or M5 candle, then wait for a retest and 30-second confirmation.
+            // Detect a break on a completed M1 or M5 candle, then wait for a retest and 1-minute confirmation.
             UpdateBreakoutState(m, highs, lows, buffer, now);
 
             if (m.PendingBreakoutSide.HasValue)
@@ -464,12 +466,12 @@ namespace cAlgo.Robots
 
         private bool IsBullishConfirmation(MarketState m)
         {
-            return m.LastClosed30 != null && m.LastClosed30.Close > m.LastClosed30.Open;
+            return m.LastClosed1 != null && m.LastClosed1.Close > m.LastClosed1.Open;
         }
 
         private bool IsBearishConfirmation(MarketState m)
         {
-            return m.LastClosed30 != null && m.LastClosed30.Close < m.LastClosed30.Open;
+            return m.LastClosed1 != null && m.LastClosed1.Close < m.LastClosed1.Open;
         }
 
         private string ReadMarketStructure(Bars bars)
