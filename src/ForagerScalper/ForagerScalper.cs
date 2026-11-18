@@ -21,6 +21,9 @@ namespace cAlgo.Robots
         [Parameter("Maximum lots per position", DefaultValue = 0.50, MinValue = 0.01, Step = 0.01, Group = "Risk")]
         public double MaxLots { get; set; }
 
+        [Parameter("Net profit target per position (account currency)", DefaultValue = 1.00, MinValue = 0.01, Step = 0.01, Group = "Risk")]
+        public double ProfitTargetAmount { get; set; }
+
         [Parameter("Dry run (no broker orders)", DefaultValue = false, Group = "Safety")]
         public bool DryRun { get; set; }
 
@@ -82,7 +85,6 @@ namespace cAlgo.Robots
         }
 
         private readonly List<MarketState> _markets = new List<MarketState>();
-        private readonly Dictionary<long, double> _positionTargets = new Dictionary<long, double>();
 
         protected override void OnStart()
         {
@@ -137,10 +139,9 @@ namespace cAlgo.Robots
                 return;
             }
 
-            Positions.Closed += OnPositionClosed;
             Timer.Start(ScanInterval);
-            Print("NEW MTF STRUCTURE SCALPER STARTED. Markets loaded: {0}. Positions are held until their structural target or stop loss is reached.",
-                _markets.Count);
+            Print("NEW MTF STRUCTURE SCALPER STARTED. Markets loaded: {0}. NO AUTOMATIC STOP LOSS. Each position closes at {1:F2} net profit, then the same market is re-evaluated for a fresh valid signal.",
+                _markets.Count, ProfitTargetAmount);
         }
 
         protected override void OnTimer()
@@ -388,14 +389,11 @@ namespace cAlgo.Robots
         private void OpenPosition(MarketState m, Signal signal, DateTime now)
         {
             double entry = signal.Side == TradeType.Buy ? m.Symbol.Ask : m.Symbol.Bid;
-            double stopPips = signal.Side == TradeType.Buy
-                ? (entry - signal.StopPrice) / m.Symbol.PipSize
-                : (signal.StopPrice - entry) / m.Symbol.PipSize;
             double targetPips = signal.Side == TradeType.Buy
                 ? (signal.TargetPrice - entry) / m.Symbol.PipSize
                 : (entry - signal.TargetPrice) / m.Symbol.PipSize;
 
-            if (stopPips <= 0 || targetPips <= 0)
+            if (targetPips <= 0)
                 return;
 
             double lots = Math.Min(LotsPerPosition, MaxLots);
@@ -409,14 +407,13 @@ namespace cAlgo.Robots
 
             if (DryRun)
             {
-                Print("[DRY RUN] {0} {1} {2} | SL {3:F1} pips | target {4:F1} pips | {5}",
-                    m.Symbol.Name, signal.Side, lots, stopPips, targetPips, signal.Reason);
+                Print("[DRY RUN] {0} {1} {2} | close at {3:F2} net profit | {4}",
+                    m.Symbol.Name, signal.Side, lots, ProfitTargetAmount, signal.Reason);
                 m.LastEntryTime = now;
                 return;
             }
 
-            TradeResult result = ExecuteMarketOrder(signal.Side, m.Symbol.Name, volume,
-                BotLabel, stopPips, targetPips);
+            TradeResult result = ExecuteMarketOrder(signal.Side, m.Symbol.Name, volume, BotLabel);
 
             if (!result.IsSuccessful)
             {
@@ -425,39 +422,25 @@ namespace cAlgo.Robots
             }
 
             m.LastEntryTime = now;
-            if (result.Position != null)
-                _positionTargets[result.Position.Id] = signal.TargetPrice;
-
-            Print("OPENED {0} {1} at {2} | SL {3:F1} pips | structural target {4:F1} pips | {5}",
-                m.Symbol.Name, signal.Side, result.Position.EntryPrice, stopPips, targetPips,
-                signal.Reason);
+            Print("OPENED {0} {1} at {2} | no automatic SL/TP | net-profit close target {3:F2} | {4}",
+                m.Symbol.Name, signal.Side, result.Position.EntryPrice, ProfitTargetAmount, signal.Reason);
         }
 
         private void ManagePositions(MarketState m, DateTime now)
         {
-            double targetBuffer = Math.Max(m.Symbol.PipSize,
-                AverageRange(m.M10, 14) * 0.05);
-
             foreach (Position position in Positions.FindAll(BotLabel, m.Symbol.Name))
             {
-                double target;
-                bool targetHit = _positionTargets.TryGetValue(position.Id, out target)
-                    && (position.TradeType == TradeType.Buy
-                        ? m.Symbol.Bid >= target - targetBuffer
-                        : m.Symbol.Ask <= target + targetBuffer);
-
-                if (targetHit)
+                if (position.NetProfit >= ProfitTargetAmount)
                 {
-                    ClosePosition(position);
-                    _positionTargets.Remove(position.Id);
+                    TradeResult closeResult = ClosePosition(position);
+                    if (closeResult.IsSuccessful)
+                        Print("TAKE PROFIT: closed {0} {1}; net profit {2:F2}. The market will be checked for a fresh valid setup.",
+                            m.Symbol.Name, position.TradeType, position.NetProfit);
+                    else
+                        Print("TAKE PROFIT CLOSE FAILED: {0} {1}: {2}",
+                            m.Symbol.Name, position.TradeType, closeResult.Error);
                 }
             }
-        }
-
-        private void OnPositionClosed(PositionClosedEventArgs args)
-        {
-            if (args.Position.Label == BotLabel)
-                _positionTargets.Remove(args.Position.Id);
         }
 
         private bool IsBullishConfirmation(MarketState m)
@@ -614,7 +597,6 @@ namespace cAlgo.Robots
         protected override void OnStop()
         {
             Timer.Stop();
-            Positions.Closed -= OnPositionClosed;
             Print("AutoHedgeScalper stopped.");
         }
     }
