@@ -149,7 +149,7 @@ namespace cAlgo.Robots
 
             foreach (MarketState market in _markets)
             {
-                UpdateSynthetic30(market, now);
+                UpdateSynthetic1Minute(market, now);
                 ManagePositions(market, now);
 
                 if (market.LastClosed1 == null || market.LastClosed1.Start == market.LastEvaluated1)
@@ -173,7 +173,7 @@ namespace cAlgo.Robots
             }
         }
 
-        private void UpdateSynthetic30(MarketState market, DateTime now)
+        private void UpdateSynthetic1Minute(MarketState market, DateTime now)
         {
             double bid = market.Symbol.Bid;
             double ask = market.Symbol.Ask;
