@@ -9,7 +9,7 @@ namespace cAlgo.Robots
     [Robot(TimeZone = TimeZones.UTC, AccessRights = AccessRights.None)]
     public class AutoHedgeScalper : Robot
     {
-        [Parameter("Markets to scan (broker symbol names)", DefaultValue = "XAUUSD,BTCUSD,ADAUSD,ALGUSD,AVAUSD,BATUSD,BCHUSD,BNBUSD,BTCETH,BTCLTC,DOGUSD,DOTUSD,DSHUSD,ETCUSD,FILUSD,IOTUSD,LINKUSD,LTCUSD,AUDJPY,AUDUSD,EURAUD,EURCAD,EURCHF,EURGBP,EURJPY,EURUSD,GBPAUD,GBPJPY,GBPUSD,USDCAD,USDCHF,USDJPY,XAGEUR,XAGUSD,XPDUSD,XPTUSD,XCUSUSD", Group = "Markets")]
+        [Parameter("Markets to scan (broker symbol names)", DefaultValue = "XAUUSD,BTCUSD,ADAUSD,ALGUSD,AVAUSD,BATUSD,BCHUSD,BNBUSD,BTCETH,BTCLTC,DOGUSD,DOTUSD,DSHUSD,ETCUSD,FILUSD,IOTUSD,LINKUSD,LTCUSD,AUDJPY,AUDUSD,EURAUD,EURCAD,EURCHF,EURGBP,EURJPY,EURUSD,GBPAUD,GBPJPY,GBPUSD,USDCAD,USDCHF,USDJPY,XAGEUR,XAGUSD,XPDUSD,XPTUSD,XCUUSD", Group = "Markets")]
         public string MarketsToScan { get; set; }
 
         [Parameter("Maximum open positions", DefaultValue = 7, MinValue = 1, MaxValue = 20, Group = "Execution")]
