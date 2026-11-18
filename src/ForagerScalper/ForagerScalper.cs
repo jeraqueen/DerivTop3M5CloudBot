@@ -15,9 +15,6 @@ namespace cAlgo.Robots
         [Parameter("Maximum open positions", DefaultValue = 7, MinValue = 1, MaxValue = 20, Group = "Execution")]
         public int MaxOpenPositions { get; set; }
 
-        [Parameter("Maximum holding time (seconds)", DefaultValue = 8, MinValue = 1, MaxValue = 8, Group = "Execution")]
-        public int MaxHoldSeconds { get; set; }
-
         [Parameter("Lots per position", DefaultValue = 0.01, MinValue = 0.001, Step = 0.001, Group = "Risk")]
         public double LotsPerPosition { get; set; }
 
@@ -142,8 +139,8 @@ namespace cAlgo.Robots
 
             Positions.Closed += OnPositionClosed;
             Timer.Start(ScanInterval);
-            Print("NEW MTF STRUCTURE SCALPER STARTED. Markets loaded: {0}. Maximum hold: {1}s.",
-                _markets.Count, MaxHoldSeconds);
+            Print("NEW MTF STRUCTURE SCALPER STARTED. Markets loaded: {0}. Positions are held until their structural target or stop loss is reached.",
+                _markets.Count);
         }
 
         protected override void OnTimer()
@@ -431,9 +428,9 @@ namespace cAlgo.Robots
             if (result.Position != null)
                 _positionTargets[result.Position.Id] = signal.TargetPrice;
 
-            Print("OPENED {0} {1} at {2} | SL {3:F1} pips | target {4:F1} pips | max hold {5}s | {6}",
+            Print("OPENED {0} {1} at {2} | SL {3:F1} pips | structural target {4:F1} pips | {5}",
                 m.Symbol.Name, signal.Side, result.Position.EntryPrice, stopPips, targetPips,
-                MaxHoldSeconds, signal.Reason);
+                signal.Reason);
         }
 
         private void ManagePositions(MarketState m, DateTime now)
@@ -449,8 +446,7 @@ namespace cAlgo.Robots
                         ? m.Symbol.Bid >= target - targetBuffer
                         : m.Symbol.Ask <= target + targetBuffer);
 
-                bool timeExpired = (now - position.EntryTime).TotalSeconds >= MaxHoldSeconds;
-                if (targetHit || timeExpired)
+                if (targetHit)
                 {
                     ClosePosition(position);
                     _positionTargets.Remove(position.Id);
