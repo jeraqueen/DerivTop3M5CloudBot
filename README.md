@@ -9,9 +9,9 @@ The only entry strategy in AutoHedgeScalper is:
 - **M15:** identify bullish, bearish, or ranging market structure from swing highs and lows.
 - **M10:** identify support, resistance, rising support trendlines, and falling resistance trendlines.
 - **M5 and M1:** detect price approaching or touching those areas.
-- **Synthetic 30-second candle:** aggregate live quotes into 30-second candles and wait for a bullish or bearish confirmation candle.
+- **Synthetic one-minute candle:** aggregate live quotes into one-minute candles and wait for a bullish or bearish confirmation candle.
 - **Reversals:** buy confirmed support/trendline-support reactions and sell confirmed resistance/trendline-resistance reactions.
-- **Breakouts:** detect a completed M1/M5 close beyond a level, wait for a retest, and require 30-second confirmation in the breakout direction.
+- **Breakouts:** detect a completed M1/M5 close beyond a level, wait for a retest, and require one-minute confirmation in the breakout direction.
 - **Position management:** close at the next structural target when reached, or no later than 8 seconds after entry.
 
 The old EMA, RSI, confidence-score, spread-cost, and session/day entry gates have been removed from AutoHedgeScalper. Structural conditions are the entry logic.
