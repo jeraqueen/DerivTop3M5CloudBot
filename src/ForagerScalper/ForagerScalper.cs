@@ -182,14 +182,11 @@ namespace cAlgo.Robots
                 return;
 
             double mid = (bid + ask) / 2.0;
-            long bucketTicks = now.Ticks - (now.Ticks % SyntheticCandlePeriod.Ticks);
-            DateTime bucket = new DateTime(bucketTicks, now.Kind);
-
             if (market.Building30 == null)
             {
                 market.Building30 = new Candle30
                 {
-                    Start = bucket,
+                    Start = now,
                     Open = mid,
                     High = mid,
                     Low = mid,
@@ -198,13 +195,13 @@ namespace cAlgo.Robots
                 return;
             }
 
-            if (bucket > market.Building30.Start)
+            if ((now - market.Building30.Start) >= SyntheticCandlePeriod)
             {
                 market.Previous30 = market.LastClosed30;
                 market.LastClosed30 = market.Building30;
                 market.Building30 = new Candle30
                 {
-                    Start = bucket,
+                    Start = now,
                     Open = mid,
                     High = mid,
                     Low = mid,
