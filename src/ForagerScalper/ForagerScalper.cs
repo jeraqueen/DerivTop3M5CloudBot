@@ -160,9 +160,7 @@ namespace cAlgo.Robots
 
                 market.LastEvaluated30 = market.LastClosed30.Start;
 
-                int openCount = Positions.FindAll(BotLabel).Length;
-                if (DryRun)
-                    openCount = CountDryRunPositions();
+                int openCount = _markets.Sum(x => Positions.FindAll(BotLabel, x.Symbol.Name).Length);
 
                 if (openCount >= MaxOpenPositions)
                     continue;
@@ -292,7 +290,7 @@ namespace cAlgo.Robots
             }
 
             // Detect a break on a completed M1 or M5 candle, then wait for a retest and 30-second confirmation.
-            UpdateBreakoutState(m, resistance, support, buffer, now);
+            UpdateBreakoutState(m, highs, lows, buffer, now);
 
             if (m.PendingBreakoutSide.HasValue)
             {
@@ -332,22 +330,38 @@ namespace cAlgo.Robots
             return null;
         }
 
-        private void UpdateBreakoutState(MarketState m, double resistance, double support,
+        private void UpdateBreakoutState(MarketState m, List<Pivot> highs, List<Pivot> lows,
             double buffer, DateTime now)
         {
-            double m1Close = m.M1.ClosePrices[m.M1.Count - 2];
-            double m5Close = m.M5.ClosePrices[m.M5.Count - 2];
+            if (m.PendingBreakoutSide.HasValue || m.M1.Count < 4 || m.M5.Count < 4)
+                return;
 
-            if (resistance > 0 && (m1Close > resistance + buffer || m5Close > resistance + buffer))
+            double previousM1 = m.M1.ClosePrices[m.M1.Count - 3];
+            double currentM1 = m.M1.ClosePrices[m.M1.Count - 2];
+            double previousM5 = m.M5.ClosePrices[m.M5.Count - 3];
+            double currentM5 = m.M5.ClosePrices[m.M5.Count - 2];
+
+            double priorSupport;
+            double priorResistance;
+            FindNearestLevels(highs, lows, previousM1, out priorSupport, out priorResistance);
+
+            bool brokeUp = priorResistance > 0
+                && ((previousM1 <= priorResistance + buffer && currentM1 > priorResistance + buffer)
+                    || (previousM5 <= priorResistance + buffer && currentM5 > priorResistance + buffer));
+            bool brokeDown = priorSupport > 0
+                && ((previousM1 >= priorSupport - buffer && currentM1 < priorSupport - buffer)
+                    || (previousM5 >= priorSupport - buffer && currentM5 < priorSupport - buffer));
+
+            if (brokeUp)
             {
                 m.PendingBreakoutSide = TradeType.Buy;
-                m.PendingBreakoutLevel = resistance;
+                m.PendingBreakoutLevel = priorResistance;
                 m.PendingBreakoutTime = now;
             }
-            else if (support > 0 && (m1Close < support - buffer || m5Close < support - buffer))
+            else if (brokeDown)
             {
                 m.PendingBreakoutSide = TradeType.Sell;
-                m.PendingBreakoutLevel = support;
+                m.PendingBreakoutLevel = priorSupport;
                 m.PendingBreakoutTime = now;
             }
         }
@@ -597,11 +611,6 @@ namespace cAlgo.Robots
         private bool IsNear(double price, double level, double tolerance)
         {
             return level > 0 && Math.Abs(price - level) <= tolerance;
-        }
-
-        private int CountDryRunPositions()
-        {
-            return 0;
         }
 
         protected override void OnStop()
