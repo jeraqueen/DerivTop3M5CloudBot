@@ -18,17 +18,13 @@ The old EMA, RSI, confidence-score, spread-cost, and session/day entry gates hav
 
 ### Markets
 
-The Markets to scan (broker symbol names) parameter is a comma-separated watchlist. The default is:
+The Markets to scan (broker symbol names) parameter is a comma-separated watchlist. The updated default watchlist uses symbols visible in the supplied broker screenshots, plus BTCUSD requested by the user:
 
-- XAUUSD
-- EURUSD
-- GBPUSD
-- USDJPY
-- US100
-- US500
-- US30
+- **Crypto:** BTCUSD, ADAUSD, ALGUSD, AVAUSD, BATUSD, BCHUSD, BNBUSD, BTCETH, BTCLTC, DOGUSD, DOTUSD, DSHUSD, ETCUSD, FILUSD, IOTUSD, LINKUSD, LTCUSD
+- **Forex:** AUDJPY, AUDUSD, EURAUD, EURCAD, EURCHF, EURGBP, EURJPY, EURUSD, GBPAUD, GBPJPY, GBPUSD, USDCAD, USDCHF, USDJPY
+- **Metals:** XAUUSD, XAGEUR, XAGUSD, XPDUSD, XPTUSD, XCUUSD
 
-Add the exact stock and futures/CFD symbol names shown by the connected cTrader broker. Symbol names vary by broker; unavailable names are reported in the cBot log and skipped. The bot can only trade instruments made available by the connected broker.
+US100, US500, and US30 have been removed because they are not listed by this broker. Symbol names vary by broker; unavailable names are reported in the cBot log and skipped. BTCUSD was explicitly requested but is not visible in the screenshots, so confirm it loads in the cBot log. The bot can only trade instruments made available by the connected broker.
 
 ### Safety and execution
 
