@@ -1,9 +1,10 @@
-name: Build weekend cTrader bot
+name: Build cTrader cBots
 
 on:
   push:
     branches:
       - main
+      - mtf-structure-scalper
   workflow_dispatch:
 
 permissions:
@@ -21,33 +22,49 @@ jobs:
         with:
           dotnet-version: '6.0.x'
 
-      - name: Restore weekend cBot project
+      - name: Restore AutoHedgeScalper project
+        run: dotnet restore src/ForagerScalper/ForagerScalper.csproj
+
+      - name: Build AutoHedgeScalper project
+        run: dotnet build src/ForagerScalper/ForagerScalper.csproj --configuration Release --no-restore
+
+      - name: Restore WeekendSweepReclaim project
         run: dotnet restore src/WeekendSweepReclaim/WeekendSweepReclaim.csproj
 
-      - name: Build weekend cBot
+      - name: Build WeekendSweepReclaim project
         run: dotnet build src/WeekendSweepReclaim/WeekendSweepReclaim.csproj --configuration Release --no-restore
 
-      - name: Collect and verify compiled cTrader package
+      - name: Collect and verify cTrader packages
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          mapfile -t files < <(find src/WeekendSweepReclaim/bin -type f -name '*.algo' -print)
-          if [ "${#files[@]}" -ne 1 ]; then
-            echo "Expected exactly one WeekendSweepReclaim .algo file; found ${#files[@]}"
-            printf '%s\\n' "${files[@]}"
+          mapfile -t auto_files < <(find src/ForagerScalper/bin -type f -name '*.algo' -print)
+          mapfile -t weekend_files < <(find src/WeekendSweepReclaim/bin -type f -name '*.algo' -print)
+          if [ "${#auto_files[@]}" -ne 1 ]; then
+            echo "Expected exactly one AutoHedgeScalper .algo file; found ${#auto_files[@]}"
+            printf '%s\\n' "${auto_files[@]}"
             exit 1
           fi
-          cp "${files[0]}" artifacts/WeekendSweepReclaim.algo
+          if [ "${#weekend_files[@]}" -ne 1 ]; then
+            echo "Expected exactly one WeekendSweepReclaim .algo file; found ${#weekend_files[@]}"
+            printf '%s\\n' "${weekend_files[@]}"
+            exit 1
+          fi
+          cp "${auto_files[0]}" artifacts/AutoHedgeScalper.algo
+          cp src/ForagerScalper/ForagerScalper.cs artifacts/AutoHedgeScalper.cs
+          cp "${weekend_files[0]}" artifacts/WeekendSweepReclaim.algo
           cp src/WeekendSweepReclaim/WeekendSweepReclaim.cs artifacts/WeekendSweepReclaim.cs
+          test -s artifacts/AutoHedgeScalper.algo
+          test -s artifacts/AutoHedgeScalper.cs
           test -s artifacts/WeekendSweepReclaim.algo
           test -s artifacts/WeekendSweepReclaim.cs
-          ls -lh artifacts/WeekendSweepReclaim.algo artifacts/WeekendSweepReclaim.cs
+          ls -lh artifacts/
 
-      - name: Upload compiled cTrader bot
+      - name: Upload compiled cTrader packages
         uses: actions/upload-artifact@v4
         with:
-          name: WeekendSweepReclaim-cTrader
+          name: cTrader-AutoHedgeScalper-MTF-and-Weekend
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
