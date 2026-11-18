@@ -302,7 +302,7 @@ namespace cAlgo.Robots
                     {
                         double target = FindNextLevelAbove(highs, price);
                         if (target <= price)
-                            target = price + 2.0 * Math.Abs(price - (m.PendingBreakoutLevel - buffer));
+                            return null;
                         Signal signal = MakeSignal(m, TradeType.Buy, m.PendingBreakoutLevel - buffer,
                             target, "Resistance breakout retest; " + structure);
                         if (signal != null)
@@ -314,7 +314,7 @@ namespace cAlgo.Robots
                     {
                         double target = FindNextLevelBelow(lows, price);
                         if (target <= 0 || target >= price)
-                            target = price - 2.0 * Math.Abs((m.PendingBreakoutLevel + buffer) - price);
+                            return null;
                         Signal signal = MakeSignal(m, TradeType.Sell, m.PendingBreakoutLevel + buffer,
                             target, "Support breakdown retest; " + structure);
                         if (signal != null)
@@ -436,13 +436,16 @@ namespace cAlgo.Robots
 
         private void ManagePositions(MarketState m, DateTime now)
         {
+            double targetBuffer = Math.Max(m.Symbol.PipSize,
+                AverageRange(m.M10, 14) * 0.05);
+
             foreach (Position position in Positions.FindAll(BotLabel, m.Symbol.Name))
             {
                 double target;
                 bool targetHit = _positionTargets.TryGetValue(position.Id, out target)
                     && (position.TradeType == TradeType.Buy
-                        ? m.Symbol.Bid >= target
-                        : m.Symbol.Ask <= target);
+                        ? m.Symbol.Bid >= target - targetBuffer
+                        : m.Symbol.Ask <= target + targetBuffer);
 
                 bool timeExpired = (now - position.EntryTime).TotalSeconds >= MaxHoldSeconds;
                 if (targetHit || timeExpired)
