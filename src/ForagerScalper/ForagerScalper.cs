@@ -461,9 +461,9 @@ namespace cAlgo.Robots
                     // and show the exact account-currency profit it is monitoring.
                     if ((now - m.LastProfitLogTime) >= ProfitLogInterval)
                     {
-                        Print("POSITION MONITOR [{0}] id={1} side={2} net={3:F2} target={4:F2} accountCurrency={5}",
+                        Print("POSITION MONITOR [{0}] id={1} side={2} net={3:F2} target={4:F2} (account currency)",
                             m.Symbol.Name, position.Id, position.TradeType, netProfit,
-                            ProfitTargetAmount, Account.Asset.Name);
+                            ProfitTargetAmount);
                     }
 
                     if (netProfit < ProfitTargetAmount)
