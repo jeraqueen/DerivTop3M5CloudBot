@@ -43,6 +43,9 @@ namespace cAlgo.Robots
         private const int PivotStrength = 2;
         private static readonly TimeSpan SyntheticCandlePeriod = TimeSpan.FromMinutes(1);
         private static readonly TimeSpan ScanInterval = TimeSpan.FromMilliseconds(250);
+        private static readonly TimeSpan SignalCheckInterval = TimeSpan.FromSeconds(2);
+        private static readonly TimeSpan ProfitLogInterval = TimeSpan.FromSeconds(5);
+        private static readonly TimeSpan CloseRetryInterval = TimeSpan.FromSeconds(1);
 
         private sealed class Candle1
         {
@@ -70,7 +73,10 @@ namespace cAlgo.Robots
             public Candle1 Previous1;
             public Candle1 LastClosed1;
             public DateTime LastEvaluated1 = DateTime.MinValue;
+            public DateTime LastSignalCheckTime = DateTime.MinValue;
+            public DateTime LastProfitLogTime = DateTime.MinValue;
             public DateTime LastEntryTime = DateTime.MinValue;
+            public readonly Dictionary<int, DateTime> LastCloseAttempt = new Dictionary<int, DateTime>();
             public TradeType? PendingBreakoutSide;
             public double PendingBreakoutLevel;
             public DateTime PendingBreakoutTime = DateTime.MinValue;
@@ -150,27 +156,40 @@ namespace cAlgo.Robots
 
             foreach (MarketState market in _markets)
             {
-                UpdateSynthetic1Minute(market, now);
-                ManagePositions(market, now);
+                // Isolate each symbol: a data or broker error on one market must not
+                // prevent profit management on the remaining markets.
+                try
+                {
+                    UpdateSynthetic1Minute(market, now);
+                    ManagePositions(market, now);
 
-                if (market.LastClosed1 == null || market.LastClosed1.Start == market.LastEvaluated1)
-                    continue;
+                    // A completed synthetic 1-minute candle is required for confirmation,
+                    // but do not require a NEW candle for every entry attempt. This lets
+                    // the bot re-check a still-valid setup after a manual position close.
+                    if (market.LastClosed1 == null)
+                        continue;
 
-                market.LastEvaluated1 = market.LastClosed1.Start;
+                    if ((now - market.LastSignalCheckTime) < SignalCheckInterval)
+                        continue;
 
-                int openCount = _markets.Sum(x => Positions.FindAll(BotLabel, x.Symbol.Name).Length);
+                    market.LastSignalCheckTime = now;
 
-                if (openCount >= MaxOpenPositions)
-                    continue;
+                    int openCount = _markets.Sum(x => Positions.FindAll(BotLabel, x.Symbol.Name).Length);
+                    if (openCount >= MaxOpenPositions)
+                        continue;
 
-                if (Positions.FindAll(BotLabel, market.Symbol.Name).Length > 0)
-                    continue;
+                    // One bot-managed position per symbol at a time.
+                    if (Positions.FindAll(BotLabel, market.Symbol.Name).Length > 0)
+                        continue;
 
-                Signal signal = FindSignal(market, now);
-                if (signal != null)
-                    OpenPosition(market, signal, now);
-                else
-                    Print("{0}: scanned latest 1-minute close; no confirmed setup yet.", market.Symbol.Name);
+                    Signal signal = FindSignal(market, now);
+                    if (signal != null)
+                        OpenPosition(market, signal, now);
+                }
+                catch (Exception ex)
+                {
+                    Print("MARKET PROCESSING ERROR [{0}]: {1}. Other markets will continue.", market.Symbol.Name, ex);
+                }
             }
         }
 
@@ -428,19 +447,58 @@ namespace cAlgo.Robots
 
         private void ManagePositions(MarketState m, DateTime now)
         {
-            foreach (Position position in Positions.FindAll(BotLabel, m.Symbol.Name))
+            Position[] positions = Positions.FindAll(BotLabel, m.Symbol.Name);
+            if (positions == null || positions.Length == 0)
+                return;
+
+            foreach (Position position in positions)
             {
-                if (position.NetProfit >= ProfitTargetAmount)
+                try
                 {
+                    double netProfit = position.NetProfit;
+
+                    // Periodic diagnostics make it clear that the manager is alive
+                    // and show the exact account-currency profit it is monitoring.
+                    if ((now - m.LastProfitLogTime) >= ProfitLogInterval)
+                    {
+                        Print("POSITION MONITOR [{0}] id={1} side={2} net={3:F2} target={4:F2} accountCurrency={5}",
+                            m.Symbol.Name, position.Id, position.TradeType, netProfit,
+                            ProfitTargetAmount, Account.Asset.Name);
+                    }
+
+                    if (netProfit < ProfitTargetAmount)
+                        continue;
+
+                    DateTime lastAttempt;
+                    if (m.LastCloseAttempt.TryGetValue(position.Id, out lastAttempt)
+                        && (now - lastAttempt) < CloseRetryInterval)
+                        continue;
+
+                    m.LastCloseAttempt[position.Id] = now;
+                    Print("TAKE PROFIT TRIGGERED [{0}] id={1}: net={2:F2}, target={3:F2}. Sending close request.",
+                        m.Symbol.Name, position.Id, netProfit, ProfitTargetAmount);
+
                     TradeResult closeResult = ClosePosition(position);
                     if (closeResult.IsSuccessful)
-                        Print("TAKE PROFIT: closed {0} {1}; net profit {2:F2}. The market will be checked for a fresh valid setup.",
-                            m.Symbol.Name, position.TradeType, position.NetProfit);
+                    {
+                        m.LastCloseAttempt.Remove(position.Id);
+                        Print("TAKE PROFIT CLOSED [{0}] id={1} side={2}; net profit at close request={3:F2}.",
+                            m.Symbol.Name, position.Id, position.TradeType, netProfit);
+                    }
                     else
-                        Print("TAKE PROFIT CLOSE FAILED: {0} {1}: {2}",
-                            m.Symbol.Name, position.TradeType, closeResult.Error);
+                    {
+                        Print("TAKE PROFIT CLOSE FAILED [{0}] id={1}: {2}. Will retry.",
+                            m.Symbol.Name, position.Id, closeResult.Error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Print("POSITION MANAGEMENT ERROR [{0}] id={1}: {2}",
+                        m.Symbol.Name, position.Id, ex);
                 }
             }
+
+            m.LastProfitLogTime = now;
         }
 
         private bool IsBullishConfirmation(MarketState m)
