@@ -38,7 +38,7 @@ namespace cAlgo.Robots
         [Parameter("Start hour UTC", DefaultValue = 7, MinValue = 0, MaxValue = 23, Group = "Session")]
         public int StartHour { get; set; }
 
-        [Parameter("End hour UTC", DefaultValue = 16, MinValue = 1, MaxValue = 24, Group = "Session")]
+        [Parameter("End hour UTC", DefaultValue = 16, MinValue = 1, MaxValue = 23, Group = "Session")]
         public int EndHour { get; set; }
 
         [Parameter("Risk per trade (%)", DefaultValue = 0.5, MinValue = 0.05, MaxValue = 5, Step = 0.05, Group = "Risk")]
@@ -120,8 +120,7 @@ namespace cAlgo.Robots
         private Bars _entryBars;
         private ExponentialMovingAverage _trendEma;
         private ExponentialMovingAverage _entryEma;
-        private DirectionalMovementSystem _dms;
-        private AverageTrueRange _atr;
+                private AverageTrueRange _atr;
         private string _label;
         private DateTime _day;
         private double _dayStartBalance;
@@ -168,8 +167,7 @@ namespace cAlgo.Robots
             _m15 = MarketData.GetBars(TimeFrame.Minute15, SymbolName);
             _trendEma = Indicators.ExponentialMovingAverage(_m15.ClosePrices, TrendEmaPeriod);
             _entryEma = Indicators.ExponentialMovingAverage(_entryBars.ClosePrices, EntryEmaPeriod);
-            _dms = Indicators.DirectionalMovementSystem(AdxPeriod);
-            _atr = Indicators.AverageTrueRange(_entryBars, AtrPeriod, MovingAverageType.Exponential);
+                        _atr = Indicators.AverageTrueRange(_entryBars, AtrPeriod, MovingAverageType.Exponential);
 
             ResetDailyState(Server.Time.Date);
             Positions.Closed += OnPositionClosed;
@@ -283,7 +281,7 @@ namespace cAlgo.Robots
             double trendClose = _m15.ClosePrices[trendIndex];
             double trendEmaNow = _trendEma.Result[trendIndex];
             double trendEmaPrevious = _trendEma.Result[trendIndex - 1];
-            double adx = _dms.ADX[trendIndex];
+            double adx = CalculateAdx(_m15, AdxPeriod, trendIndex);
             bool upTrend = trendClose > trendEmaNow && trendEmaNow > trendEmaPrevious && adx > MinimumAdx;
             bool downTrend = trendClose < trendEmaNow && trendEmaNow < trendEmaPrevious && adx > MinimumAdx;
             if (!upTrend && !downTrend)
@@ -455,6 +453,64 @@ namespace cAlgo.Robots
                     Print("POSITION MANAGEMENT ERROR {0}: {1}.", position.Id, ex.Message);
                 }
             }
+        }
+
+        // Wilder-smoothed ADX calculated directly from M15 bars so the trend
+        // strength filter always uses M15 data, regardless of the chart timeframe.
+        private double CalculateAdx(Bars bars, int period, int index)
+        {
+            if (period < 2 || index < period * 2 + 2)
+                return 0;
+
+            int first = index - (period * 2);
+            double smoothedTr = 0;
+            double smoothedPlus = 0;
+            double smoothedMinus = 0;
+
+            for (int i = first + 1; i <= first + period; i++)
+            {
+                double upMove = bars.HighPrices[i] - bars.HighPrices[i - 1];
+                double downMove = bars.LowPrices[i - 1] - bars.LowPrices[i];
+                double plusDm = upMove > downMove && upMove > 0 ? upMove : 0;
+                double minusDm = downMove > upMove && downMove > 0 ? downMove : 0;
+                double tr = Math.Max(bars.HighPrices[i] - bars.LowPrices[i],
+                    Math.Max(Math.Abs(bars.HighPrices[i] - bars.ClosePrices[i - 1]),
+                             Math.Abs(bars.LowPrices[i] - bars.ClosePrices[i - 1])));
+                smoothedTr += tr;
+                smoothedPlus += plusDm;
+                smoothedMinus += minusDm;
+            }
+
+            var dxValues = new List<double>();
+            for (int i = first + period + 1; i <= index; i++)
+            {
+                double upMove = bars.HighPrices[i] - bars.HighPrices[i - 1];
+                double downMove = bars.LowPrices[i - 1] - bars.LowPrices[i];
+                double plusDm = upMove > downMove && upMove > 0 ? upMove : 0;
+                double minusDm = downMove > upMove && downMove > 0 ? downMove : 0;
+                double tr = Math.Max(bars.HighPrices[i] - bars.LowPrices[i],
+                    Math.Max(Math.Abs(bars.HighPrices[i] - bars.ClosePrices[i - 1]),
+                             Math.Abs(bars.LowPrices[i] - bars.ClosePrices[i - 1])));
+
+                smoothedTr = smoothedTr - (smoothedTr / period) + tr;
+                smoothedPlus = smoothedPlus - (smoothedPlus / period) + plusDm;
+                smoothedMinus = smoothedMinus - (smoothedMinus / period) + minusDm;
+
+                if (smoothedTr <= 0)
+                    continue;
+
+                double plusDi = 100.0 * smoothedPlus / smoothedTr;
+                double minusDi = 100.0 * smoothedMinus / smoothedTr;
+                double denominator = plusDi + minusDi;
+                double dx = denominator <= 0 ? 0 : 100.0 * Math.Abs(plusDi - minusDi) / denominator;
+                dxValues.Add(dx);
+            }
+
+            if (dxValues.Count == 0)
+                return 0;
+
+            // A mean of the most recent period DX values is the initial Wilder ADX estimate.
+            return dxValues.Skip(Math.Max(0, dxValues.Count - period)).Average();
         }
 
         private bool IsNewsBlocked(DateTime now, out string reason)
