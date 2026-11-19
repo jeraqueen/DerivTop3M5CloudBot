@@ -77,8 +77,14 @@ namespace cAlgo.Robots
         [Parameter("Move stop to breakeven at +1R", DefaultValue = true, Group = "Stops and targets")]
         public bool MoveToBreakeven { get; set; }
 
-        [Parameter("Close 50% at +1R", DefaultValue = false, Group = "Stops and targets")]
+        [Parameter("Close partial at +R", DefaultValue = false, Group = "Stops and targets")]
         public bool CloseHalfAtOneR { get; set; }
+
+        [Parameter("Partial close percent", DefaultValue = 50, MinValue = 10, MaxValue = 90, Step = 5, Group = "Stops and targets")]
+        public double PartialClosePercent { get; set; }
+
+        [Parameter("Breakeven / management trigger (R)", DefaultValue = 1.0, MinValue = 0.2, Step = 0.1, Group = "Stops and targets")]
+        public double ManagementTriggerR { get; set; }
 
         [Parameter("Trail remaining position", DefaultValue = true, Group = "Stops and targets")]
         public bool TrailRemainingPosition { get; set; }
@@ -88,6 +94,9 @@ namespace cAlgo.Robots
 
         [Parameter("Maximum spread (pips)", DefaultValue = 1.0, MinValue = 0.1, Step = 0.1, Group = "Filters")]
         public double MaxSpreadPips { get; set; }
+
+        [Parameter("Maximum spread as % of TP", DefaultValue = 20, MinValue = 1, MaxValue = 50, Group = "Filters")]
+        public double MaxSpreadToTpPercent { get; set; }
 
         [Parameter("Minimum ATR (pips)", DefaultValue = 0.5, MinValue = 0, Step = 0.1, Group = "Filters")]
         public double MinAtrPips { get; set; }
@@ -325,7 +334,7 @@ namespace cAlgo.Robots
                 return;
             }
 
-            if (spread > targetPips * 0.20)
+            if (spread > targetPips * MaxSpreadToTpPercent / 100.0)
             {
                 Print("SKIP {0}: spread {1:F2} pips exceeds 20% of TP distance ({2:F2} pips).", SymbolName, spread, targetPips);
                 return;
@@ -370,6 +379,8 @@ namespace cAlgo.Robots
             {
                 try
                 {
+                    if (position.SymbolName != SymbolName)
+                        continue;
                     double initialRiskPips = position.TakeProfit.HasValue
                         ? Math.Abs(position.TakeProfit.Value - position.EntryPrice) / Symbol.PipSize / RewardRatio
                         : 0;
@@ -381,7 +392,7 @@ namespace cAlgo.Robots
                         ? (currentPrice - position.EntryPrice) / Symbol.PipSize
                         : (position.EntryPrice - currentPrice) / Symbol.PipSize;
 
-                    if (profitPips >= initialRiskPips)
+                    if (profitPips >= initialRiskPips * ManagementTriggerR)
                     {
                         if (MoveToBreakeven)
                         {
@@ -400,14 +411,14 @@ namespace cAlgo.Robots
 
                         if (CloseHalfAtOneR && !_partialClosed.Contains(position.Id))
                         {
-                            double half = Symbol.NormalizeVolumeInUnits(position.VolumeInUnits / 2.0, RoundingMode.Down);
-                            if (half >= Symbol.VolumeInUnitsMin && half < position.VolumeInUnits)
+                            double partialVolume = Symbol.NormalizeVolumeInUnits(position.VolumeInUnits * PartialClosePercent / 100.0, RoundingMode.Down);
+                            if (partialVolume >= Symbol.VolumeInUnitsMin && partialVolume < position.VolumeInUnits)
                             {
-                                TradeResult partial = ClosePosition(position, half);
+                                TradeResult partial = ClosePosition(position, partialVolume);
                                 if (partial.IsSuccessful)
                                 {
                                     _partialClosed.Add(position.Id);
-                                    Print("PARTIAL PROFIT: closed 50% of position {0} at +1R.", position.Id);
+                                    Print("PARTIAL PROFIT: closed {1:F0}% of position {0} at management trigger.", position.Id, PartialClosePercent);
                                 }
                                 else
                                     Print("PARTIAL CLOSE FAILED: position {0}: {1}.", position.Id, partial.Error);
@@ -420,7 +431,7 @@ namespace cAlgo.Robots
                         }
                     }
 
-                    if (TrailRemainingPosition && profitPips >= initialRiskPips)
+                    if (TrailRemainingPosition && profitPips >= initialRiskPips * ManagementTriggerR)
                     {
                         int index = _entryBars.Count - 2;
                         if (index < 1)
@@ -477,7 +488,7 @@ namespace cAlgo.Robots
             if (position.Label != _label)
                 return;
 
-            if (position.ClosingTime.Date == _day)
+            if (Server.Time.Date == _day)
                 _closedToday.Add(position.NetProfit);
 
             if (position.NetProfit < 0)
