@@ -160,8 +160,10 @@ namespace cAlgo.Robots
                 // prevent profit management on the remaining markets.
                 try
                 {
-                    UpdateSynthetic1Minute(market, now);
+                    // Manage existing positions before doing any market-data work.
+                    // If a quote/candle update fails, profit management still gets its turn.
                     ManagePositions(market, now);
+                    UpdateSynthetic1Minute(market, now);
 
                     // A completed synthetic 1-minute candle is required for confirmation,
                     // but do not require a NEW candle for every entry attempt. This lets
