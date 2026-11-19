@@ -22,17 +22,20 @@ jobs:
         with:
           dotnet-version: '6.0.x'
 
-      - name: Restore AutoHedgeScalper project
-        run: dotnet restore src/ForagerScalper/ForagerScalper.csproj
+      - name: Restore and build AutoHedgeScalper
+        run: |
+          dotnet restore src/ForagerScalper/ForagerScalper.csproj
+          dotnet build src/ForagerScalper/ForagerScalper.csproj --configuration Release --no-restore
 
-      - name: Build AutoHedgeScalper project
-        run: dotnet build src/ForagerScalper/ForagerScalper.csproj --configuration Release --no-restore
+      - name: Restore and build WeekendSweepReclaim
+        run: |
+          dotnet restore src/WeekendSweepReclaim/WeekendSweepReclaim.csproj
+          dotnet build src/WeekendSweepReclaim/WeekendSweepReclaim.csproj --configuration Release --no-restore
 
-      - name: Restore WeekendSweepReclaim project
-        run: dotnet restore src/WeekendSweepReclaim/WeekendSweepReclaim.csproj
-
-      - name: Build WeekendSweepReclaim project
-        run: dotnet build src/WeekendSweepReclaim/WeekendSweepReclaim.csproj --configuration Release --no-restore
+      - name: Restore and build SessionScalper
+        run: |
+          dotnet restore src/SessionScalper/SessionScalper.csproj
+          dotnet build src/SessionScalper/SessionScalper.csproj --configuration Release --no-restore
 
       - name: Collect and verify cTrader packages
         shell: bash
@@ -41,30 +44,29 @@ jobs:
           mkdir -p artifacts
           mapfile -t auto_files < <(find src/ForagerScalper/bin -type f -name '*.algo' -print)
           mapfile -t weekend_files < <(find src/WeekendSweepReclaim/bin -type f -name '*.algo' -print)
-          if [ "${#auto_files[@]}" -ne 1 ]; then
-            echo "Expected exactly one AutoHedgeScalper .algo file; found ${#auto_files[@]}"
-            printf '%s\\n' "${auto_files[@]}"
-            exit 1
-          fi
-          if [ "${#weekend_files[@]}" -ne 1 ]; then
-            echo "Expected exactly one WeekendSweepReclaim .algo file; found ${#weekend_files[@]}"
-            printf '%s\\n' "${weekend_files[@]}"
-            exit 1
-          fi
+          mapfile -t session_files < <(find src/SessionScalper/bin -type f -name '*.algo' -print)
+          for spec in "AutoHedgeScalper:${#auto_files[@]}" "WeekendSweepReclaim:${#weekend_files[@]}" "SessionScalper:${#session_files[@]}"; do
+            count="${spec##*:}"
+            if [ "$count" -ne 1 ]; then
+              echo "Expected exactly one .algo for ${spec%%:*}; found $count"
+              exit 1
+            fi
+          done
           cp "${auto_files[0]}" artifacts/AutoHedgeScalper.algo
           cp src/ForagerScalper/ForagerScalper.cs artifacts/AutoHedgeScalper.cs
           cp "${weekend_files[0]}" artifacts/WeekendSweepReclaim.algo
           cp src/WeekendSweepReclaim/WeekendSweepReclaim.cs artifacts/WeekendSweepReclaim.cs
+          cp "${session_files[0]}" artifacts/SessionScalper.algo
+          cp src/SessionScalper/SessionScalper.cs artifacts/SessionScalper.cs
           test -s artifacts/AutoHedgeScalper.algo
-          test -s artifacts/AutoHedgeScalper.cs
           test -s artifacts/WeekendSweepReclaim.algo
-          test -s artifacts/WeekendSweepReclaim.cs
+          test -s artifacts/SessionScalper.algo
           ls -lh artifacts/
 
       - name: Upload compiled cTrader packages
         uses: actions/upload-artifact@v4
         with:
-          name: cTrader-AutoHedgeScalper-MTF-and-Weekend
+          name: cTrader-All-Bots-Including-SessionScalper
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
