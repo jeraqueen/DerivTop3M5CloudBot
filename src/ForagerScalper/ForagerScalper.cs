@@ -99,7 +99,8 @@ namespace cAlgo.Robots
             public string Reason;
         }
 
-        private readonly List<MarketState> _markets = new List<MarketState>();\n        private int _scanOffset;
+        private readonly List<MarketState> _markets = new List<MarketState>();
+        private int _scanOffset;
 
         protected override void OnStart()
         {
