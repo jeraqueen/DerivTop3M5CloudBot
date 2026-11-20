@@ -24,6 +24,15 @@ namespace cAlgo.Robots
         [Parameter("Net profit target per position (account currency)", DefaultValue = 1.00, MinValue = 0.01, Step = 0.01, Group = "Risk")]
         public double ProfitTargetAmount { get; set; }
 
+        [Parameter("Risk per trade (% balance)", DefaultValue = 0.50, MinValue = 0.05, MaxValue = 5, Step = 0.05, Group = "Risk")]
+        public double RiskPercent { get; set; }
+
+        [Parameter("Use risk-based volume", DefaultValue = true, Group = "Risk")]
+        public bool UseRiskBasedVolume { get; set; }
+
+        [Parameter("Market entry cooldown (seconds)", DefaultValue = 60, MinValue = 0, MaxValue = 3600, Group = "Execution")]
+        public int EntryCooldownSeconds { get; set; }
+
         [Parameter("Dry run (no broker orders)", DefaultValue = false, Group = "Safety")]
         public bool DryRun { get; set; }
 
@@ -90,7 +99,7 @@ namespace cAlgo.Robots
             public string Reason;
         }
 
-        private readonly List<MarketState> _markets = new List<MarketState>();
+        private readonly List<MarketState> _markets = new List<MarketState>();\n        private int _scanOffset;
 
         protected override void OnStart()
         {
@@ -410,41 +419,63 @@ namespace cAlgo.Robots
         private void OpenPosition(MarketState m, Signal signal, DateTime now)
         {
             double entry = signal.Side == TradeType.Buy ? m.Symbol.Ask : m.Symbol.Bid;
+            double stopPips = signal.Side == TradeType.Buy
+                ? (entry - signal.StopPrice) / m.Symbol.PipSize
+                : (signal.StopPrice - entry) / m.Symbol.PipSize;
             double targetPips = signal.Side == TradeType.Buy
                 ? (signal.TargetPrice - entry) / m.Symbol.PipSize
                 : (entry - signal.TargetPrice) / m.Symbol.PipSize;
 
-            if (targetPips <= 0)
+            if (stopPips <= 0 || targetPips <= 0)
+            {
+                Print("{0}: SKIPPED invalid stop/target geometry. SL={1}, TP={2}", m.Symbol.Name, stopPips, targetPips);
                 return;
+            }
 
             double lots = Math.Min(LotsPerPosition, MaxLots);
+            double riskCash = Account.Balance * RiskPercent / 100.0;
+            if (UseRiskBasedVolume && m.Symbol.PipValue > 0)
+            {
+                double riskLots = riskCash / (stopPips * m.Symbol.PipValue);
+                lots = Math.Min(riskLots, MaxLots);
+                if (lots < m.Symbol.VolumeInUnitsMin / m.Symbol.LotSize)
+                {
+                    Print("{0}: SKIPPED risk-sized volume {1:F5} lots below broker minimum. Risk={2:F2}, SL={3:F1} pips.",
+                        m.Symbol.Name, lots, riskCash, stopPips);
+                    return;
+                }
+            }
+
             double volume = m.Symbol.QuantityToVolumeInUnits(lots);
             volume = m.Symbol.NormalizeVolumeInUnits(volume, RoundingMode.Down);
             if (volume < m.Symbol.VolumeInUnitsMin)
             {
-                Print("{0}: calculated volume is below broker minimum; no order sent.", m.Symbol.Name);
+                Print("{0}: SKIPPED volume below broker minimum.", m.Symbol.Name);
                 return;
             }
 
+            double actualLots = m.Symbol.VolumeInUnitsToQuantity(volume);
             if (DryRun)
             {
-                Print("[DRY RUN] {0} {1} {2} | close at {3:F2} net profit | {4}",
-                    m.Symbol.Name, signal.Side, lots, ProfitTargetAmount, signal.Reason);
+                Print("[DRY RUN] {0} {1} {2:F3} lots | SL={3:F1} pips | TP={4:F1} pips | estimated risk={5:F2} | {6}",
+                    m.Symbol.Name, signal.Side, actualLots, stopPips, targetPips, stopPips * m.Symbol.PipValue * actualLots, signal.Reason);
                 m.LastEntryTime = now;
                 return;
             }
 
-            TradeResult result = ExecuteMarketOrder(signal.Side, m.Symbol.Name, volume, BotLabel);
+            TradeResult result = ExecuteMarketOrder(signal.Side, m.Symbol.Name, volume, BotLabel, stopPips, targetPips);
 
             if (!result.IsSuccessful)
             {
-                Print("{0}: order rejected: {1}", m.Symbol.Name, result.Error);
+                Print("{0}: ORDER REJECTED {1} {2:F3} lots | SL={3:F1} | TP={4:F1} | {5}",
+                    m.Symbol.Name, signal.Side, actualLots, stopPips, targetPips, result.Error);
                 return;
             }
 
             m.LastEntryTime = now;
-            Print("OPENED {0} {1} at {2} | no automatic SL/TP | net-profit close target {3:F2} | {4}",
-                m.Symbol.Name, signal.Side, result.Position.EntryPrice, ProfitTargetAmount, signal.Reason);
+            Print("OPENED {0} {1} {2:F3} lots at {3} | SL={4:F1} pips | TP={5:F1} pips | risk estimate={6:F2} | {7}",
+                m.Symbol.Name, signal.Side, actualLots, result.Position.EntryPrice, stopPips, targetPips,
+                stopPips * m.Symbol.PipValue * actualLots, signal.Reason);
         }
 
         private void ManagePositions(MarketState m, DateTime now)
